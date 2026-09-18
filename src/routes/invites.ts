@@ -42,7 +42,8 @@ async function createInvite(
   const [invite] = await db
     .insert(invites)
     .values({
-      ...input,
+      email: input.email,
+      role: input.role,
       scope,
       workspaceId: scope === "workspace" ? targetId : undefined,
       boardId: scope === "board" ? targetId : undefined,
