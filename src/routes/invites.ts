@@ -15,7 +15,10 @@ import { boardAccess, boardWorkspace, workspaceAccess } from "../lib/access";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { memberRoleSchema } from "../validators/common";
 import { frontendUrl, sendEmail } from "../services/email";
-import { assertWorkspaceSeatAvailable } from "../services/entitlements";
+import {
+  assertCollaborationAvailable,
+  assertWorkspaceSeatAvailable,
+} from "../services/entitlements";
 
 const invitesRouter = new Hono<AppEnv>();
 
@@ -38,6 +41,9 @@ async function createInvite(
   } else {
     await boardAccess(userId, targetId, true);
   }
+  const targetWorkspaceId =
+    scope === "workspace" ? targetId : await boardWorkspace(targetId);
+  await assertCollaborationAvailable(targetWorkspaceId);
 
   const input = await body(c, inviteSchema);
   const [invite] = await db
@@ -64,9 +70,9 @@ async function createInvite(
       : await db.query.boards.findFirst({ where: eq(boards.id, targetId) });
   const email = await sendEmail({
     to: input.email,
-    subject: `You were invited to ${target?.name || "TaskFlow"}`,
-    title: `Join ${target?.name || "TaskFlow"}`,
-    message: `${inviter?.name || "A teammate"} invited you to a ${scope} on TaskFlow.`,
+    subject: `You were invited to ${target?.name || "Danto"}`,
+    title: `Join ${target?.name || "Danto"}`,
+    message: `${inviter?.name || "A teammate"} invited you to a ${scope} on Danto.`,
     actionLabel: "Accept invitation",
     actionUrl: frontendUrl(`/invites/${invite.token}`),
   });
@@ -113,7 +119,8 @@ invitesRouter.post("/invites/:token/accept", async (c) => {
           eq(workspaceMembers.userId, user.id),
         ),
       });
-      if (!existing) await assertWorkspaceSeatAvailable(inviteWorkspaceId);
+      if (!existing)
+        await assertWorkspaceSeatAvailable(inviteWorkspaceId, user.id);
     }
     if (invite.scope === "workspace" && invite.workspaceId) {
       await tx

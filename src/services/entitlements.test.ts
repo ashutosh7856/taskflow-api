@@ -3,28 +3,26 @@ import { describe, expect, test } from "bun:test";
 import { hasSeatCapacity, planCatalog } from "./entitlements";
 
 describe("account plan entitlements", () => {
-  test("plans grow in price, seats, and pooled AI usage", () => {
+  test("plans grow in price, board capacity, and AI usage", () => {
     expect(planCatalog.free.priceUsd).toBe(0);
-    expect(planCatalog.free.aiRequests).toBe(10);
+    expect(planCatalog.free.aiRequests).toBe(20);
     expect(planCatalog.pro.priceUsd).toBeLessThan(
       planCatalog.business.priceUsd,
     );
-    expect(planCatalog.free.seats).toBeLessThan(planCatalog.pro.seats);
-    expect(planCatalog.pro.seats).toBeLessThan(planCatalog.business.seats);
-    expect(planCatalog.free.aiRequests).toBeLessThan(
-      planCatalog.pro.aiRequests,
-    );
-    expect(planCatalog.pro.aiRequests).toBeLessThan(
-      planCatalog.business.aiRequests,
-    );
+    expect(planCatalog.free.boards).toBe(3);
+    expect(planCatalog.pro.boards).toBeNull();
+    expect(planCatalog.free.collaboration).toBe(false);
+    expect(planCatalog.pro.collaboration).toBe(false);
+    expect(planCatalog.business.collaboration).toBe(true);
+    expect(planCatalog.pro.aiRequests).toBe(500);
+    expect(planCatalog.business.aiRequests).toBeNull();
   });
 
   test.each([
     [0, "free", true],
-    [2, "free", true],
-    [3, "free", false],
-    [4, "pro", true],
-    [5, "pro", false],
+    [1, "free", false],
+    [0, "pro", true],
+    [1, "pro", false],
     [24, "business", true],
     [25, "business", false],
   ] as const)(

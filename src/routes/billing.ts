@@ -56,30 +56,29 @@ billingRouter.post("/billing/paypal/setup", async (c) => {
   const existing = await db.query.billingPlans.findFirst({
     where: eq(billingPlans.plan, plan),
   });
-  if (existing)
+  const priceUsd = planCatalog[plan].priceUsd;
+  if (existing && existing.priceUsd === priceUsd)
     return c.json({
       plan,
       priceUsd: existing.priceUsd,
       paypalPlanId: existing.paypalPlanId,
     });
-  const priceUsd = planCatalog[plan].priceUsd;
   const product = await paypalRequest<{ id: string }>("/v1/catalogs/products", {
     method: "POST",
-    headers: { "PayPal-Request-Id": `taskflow-${plan}-account-product-v2` },
+    headers: { "PayPal-Request-Id": `danto-${plan}-account-product-v3` },
     body: JSON.stringify({
-      name: `TaskFlow ${plan === "pro" ? "Pro" : "Business"}`,
-      description:
-        "TaskFlow account subscription covering all owned workspaces",
+      name: `Danto ${plan === "pro" ? "Pro" : "Team"}`,
+      description: "Danto account subscription covering all owned workspaces",
       type: "SERVICE",
       category: "SOFTWARE",
     }),
   });
   const paypalPlan = await paypalRequest<{ id: string }>("/v1/billing/plans", {
     method: "POST",
-    headers: { "PayPal-Request-Id": `taskflow-${plan}-account-monthly-v2` },
+    headers: { "PayPal-Request-Id": `danto-${plan}-account-monthly-v3` },
     body: JSON.stringify({
       product_id: product.id,
-      name: `TaskFlow ${plan === "pro" ? "Pro" : "Business"} monthly`,
+      name: `Danto ${plan === "pro" ? "Pro" : "Team"} monthly`,
       status: "ACTIVE",
       billing_cycles: [
         {
@@ -98,15 +97,26 @@ billingRouter.post("/billing/paypal/setup", async (c) => {
       },
     }),
   });
-  const [created] = await db
-    .insert(billingPlans)
-    .values({
-      plan,
-      paypalProductId: product.id,
-      paypalPlanId: paypalPlan.id,
-      priceUsd,
-    })
-    .returning();
+  const [created] = existing
+    ? await db
+        .update(billingPlans)
+        .set({
+          paypalProductId: product.id,
+          paypalPlanId: paypalPlan.id,
+          priceUsd,
+          active: true,
+        })
+        .where(eq(billingPlans.plan, plan))
+        .returning()
+    : await db
+        .insert(billingPlans)
+        .values({
+          plan,
+          paypalProductId: product.id,
+          paypalPlanId: paypalPlan.id,
+          priceUsd,
+        })
+        .returning();
   return c.json(
     { plan, priceUsd: created.priceUsd, paypalPlanId: created.paypalPlanId },
     201,

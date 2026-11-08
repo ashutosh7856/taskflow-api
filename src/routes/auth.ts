@@ -73,10 +73,10 @@ authRouter.post("/login", async (c) => {
 
   await sendEmail({
     to: user.email,
-    subject: "New sign-in to your TaskFlow account",
+    subject: "New sign-in to your Danto account",
     title: "New sign-in detected",
-    message: `Your TaskFlow account was signed in at ${new Date().toLocaleString("en-US", { timeZone: "UTC" })} UTC. If this was not you, change your password immediately.`,
-    actionLabel: "Open TaskFlow",
+    message: `Your Danto account was signed in at ${new Date().toLocaleString("en-US", { timeZone: "UTC" })} UTC. If this was not you, change your password immediately.`,
+    actionLabel: "Open Danto",
     actionUrl: frontendUrl("/"),
   });
 

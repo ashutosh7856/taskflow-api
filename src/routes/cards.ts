@@ -162,7 +162,7 @@ cardsRouter.post("/cards/:id/members", async (c) => {
   const email = targetUser
     ? await sendEmail({
         to: targetUser.email,
-        subject: `You were assigned: ${card?.title || "TaskFlow card"}`,
+        subject: `You were assigned: ${card?.title || "Danto card"}`,
         title: "A card was assigned to you",
         message: `${actor?.name || "A teammate"} assigned you to “${card?.title || "a card"}”.`,
         actionLabel: "Open card",

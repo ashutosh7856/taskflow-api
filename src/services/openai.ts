@@ -1,7 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, count, eq, gte, sql } from "drizzle-orm";
 
 import { db } from "../db";
-import { subscriptions, workspaces } from "../db/schema";
+import { aiUsageEvents, subscriptions, workspaces } from "../db/schema";
 import { boardWorkspace } from "../lib/access";
 import { HttpError } from "../lib/http";
 import { planCatalog } from "./entitlements";
@@ -18,6 +18,10 @@ export function extractResponseText(response: any) {
 
 export async function workspaceAiAllowance(boardId: string) {
   const workspaceId = await boardWorkspace(boardId);
+  return workspaceAiAllowanceForWorkspace(workspaceId);
+}
+
+export async function workspaceAiAllowanceForWorkspace(workspaceId: string) {
   const workspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.id, workspaceId),
   });
@@ -43,7 +47,7 @@ export async function workspaceAiAllowance(boardId: string) {
     subscription.aiRequestsThisMonth = 0;
   }
   const limit = planCatalog[subscription.plan].aiRequests;
-  if (subscription.aiRequestsThisMonth >= limit) {
+  if (limit !== null && subscription.aiRequestsThisMonth >= limit) {
     throw new HttpError(
       402,
       `AI limit reached for the ${subscription.plan} plan`,
@@ -88,6 +92,60 @@ export async function openAiResponse(
     throw new HttpError(502, "AI generation failed. Please try again.");
   }
   return extractResponseText(data);
+}
+
+export async function reserveAiRequest(
+  userId: string,
+  plan: keyof typeof planCatalog,
+  feature: "board_plan" | "board_summary" | "workspace_pulse",
+  inputCharacters = 0,
+) {
+  const limits = planCatalog[plan];
+  const now = new Date();
+  const hourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+  const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${userId}))`);
+    const [hourly, daily] = await Promise.all([
+      tx
+        .select({ total: count() })
+        .from(aiUsageEvents)
+        .where(
+          and(
+            eq(aiUsageEvents.userId, userId),
+            gte(aiUsageEvents.createdAt, hourAgo),
+          ),
+        ),
+      tx
+        .select({ total: count() })
+        .from(aiUsageEvents)
+        .where(
+          and(
+            eq(aiUsageEvents.userId, userId),
+            gte(aiUsageEvents.createdAt, dayAgo),
+          ),
+        ),
+    ]);
+    if (Number(hourly[0].total) >= limits.aiHourlyRequests) {
+      throw new HttpError(
+        429,
+        "AI is being used too quickly. Try again in about an hour.",
+        { retryAfterSeconds: 3600, fairUseLimit: limits.aiHourlyRequests },
+      );
+    }
+    if (Number(daily[0].total) >= limits.aiDailyRequests) {
+      throw new HttpError(
+        429,
+        "Daily AI fair-use limit reached. Try again tomorrow.",
+        { retryAfterSeconds: 86400, fairUseLimit: limits.aiDailyRequests },
+      );
+    }
+    await tx.insert(aiUsageEvents).values({
+      userId,
+      feature,
+      inputCharacters,
+    });
+  });
 }
 
 export async function recordAiUse(userId: string, current: number) {

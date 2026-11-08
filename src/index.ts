@@ -14,6 +14,8 @@ const app = new Hono<AppEnv>();
 const allowedOrigins = new Set(
   [
     "https://taskflow-ui-b5u.pages.dev",
+    "https://danto.app",
+    "https://www.danto.app",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     process.env.FRONTEND_URL,

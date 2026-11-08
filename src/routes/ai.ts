@@ -3,14 +3,17 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { db } from "../db";
-import { boards, cards, lists } from "../db/schema";
-import { boardAccess } from "../lib/access";
-import { body, type AppEnv } from "../lib/http";
+import { boards, cards, lists, workspaces } from "../db/schema";
+import { boardAccess, workspaceAccess } from "../lib/access";
+import { body, HttpError, type AppEnv } from "../lib/http";
 import { recordActivity } from "../services/activity";
+import { assertCollaborationAvailable } from "../services/entitlements";
 import {
   openAiResponse,
   recordAiUse,
+  reserveAiRequest,
   workspaceAiAllowance,
+  workspaceAiAllowanceForWorkspace,
 } from "../services/openai";
 
 const aiRouter = new Hono<AppEnv>();
@@ -110,12 +113,58 @@ const executiveUpdateJsonSchema = {
   },
 };
 
+const commandCenterSchema = z.object({
+  overallHealth: z.enum(["healthy", "watch", "at_risk", "unknown"]),
+  headline: z.string().min(1).max(180),
+  executiveSummary: z.string().min(1).max(1600),
+  progressHighlights: z.array(z.string().min(1).max(350)).max(6),
+  risks: z.array(z.string().min(1).max(350)).max(6),
+  attentionNeeded: z.array(z.string().min(1).max(350)).max(6),
+  ownershipOverview: z.array(z.string().min(1).max(350)).max(10),
+});
+const commandCenterJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "overallHealth",
+    "headline",
+    "executiveSummary",
+    "progressHighlights",
+    "risks",
+    "attentionNeeded",
+    "ownershipOverview",
+  ],
+  properties: {
+    overallHealth: {
+      type: "string",
+      enum: ["healthy", "watch", "at_risk", "unknown"],
+    },
+    headline: { type: "string" },
+    executiveSummary: { type: "string" },
+    progressHighlights: { type: "array", items: { type: "string" } },
+    risks: { type: "array", items: { type: "string" } },
+    attentionNeeded: { type: "array", items: { type: "string" } },
+    ownershipOverview: { type: "array", items: { type: "string" } },
+  },
+};
+
 aiRouter.post("/boards/:id/ai/plan", async (c) => {
   const boardId = c.req.param("id");
   await boardAccess(c.get("userId"), boardId);
-  const { prompt } = await body(
+  const { prompt, sourceType } = await body(
     c,
-    z.object({ prompt: z.string().min(12).max(4000) }),
+    z.object({
+      prompt: z.string().min(12).max(12000),
+      sourceType: z
+        .enum([
+          "brief",
+          "meeting_notes",
+          "pull_request",
+          "content_calendar",
+          "email",
+        ])
+        .default("brief"),
+    }),
   );
   const { subscription, limit } = await workspaceAiAllowance(boardId);
   const board = await db.query.boards.findFirst({
@@ -125,8 +174,14 @@ aiRouter.post("/boards/:id/ai/plan", async (c) => {
     workflowCategories[
       (board?.template || "blank") as keyof typeof workflowCategories
     ] || workflowCategories.blank;
+  await reserveAiRequest(
+    subscription.userId,
+    subscription.plan,
+    "board_plan",
+    prompt.length,
+  );
   const text = await openAiResponse(
-    `You are an expert delivery manager. Turn the request below into a concise, realistic execution board. Use 3-6 workflow lists and no more than 8 tasks per list. Tasks must be specific and actionable. This is a ${board?.template || "blank"} workflow. Every task category must be one of: ${allowedCategories.join(", ")}. Board: ${board?.name || "Untitled"}. Request: ${prompt}`,
+    `You are an expert delivery manager. The source is ${sourceType.replaceAll("_", " ")}. Extract decisions, deliverables, owners when stated, dependencies, risks, and follow-up work from the raw source. Turn it into a concise, realistic execution board, not a summary. For pull requests or commits, separate shipped work, review or QA follow-ups, documentation, and release tasks. For content calendars, create channel-aware creation, approval, and publishing work. Use 3-6 workflow lists and no more than 8 tasks per list. Tasks must be specific and actionable. This is a ${board?.template || "blank"} workflow. Every task category must be one of: ${allowedCategories.join(", ")}. Board: ${board?.name || "Untitled"}. Raw source: ${prompt}`,
     { schema: jsonSchema, schemaName: "project_plan" },
   );
   const plan = planSchema.parse(JSON.parse(text));
@@ -251,6 +306,11 @@ aiRouter.get("/boards/:id/ai/summary", async (c) => {
       })),
     })),
   }));
+  await reserveAiRequest(
+    subscription.userId,
+    subscription.plan,
+    "board_summary",
+  );
   const text = await openAiResponse(
     `Create a concise executive project update using only the supplied board data. Explicitly account for completed tasks, active tasks, categories, priorities, due dates, overdue work, assignees, labels, estimates, and checklist progress when present. Do not infer that a task is complete merely because it is in the final list; use isCompleted. Do not invent facts. Every returned string must be plain prose without Markdown, asterisks, hyphen bullets, hashtags, or formatting symbols. If there is not enough evidence for risks or progress, return an empty array for that section. Current date: ${now.toISOString()}. Exact metrics: ${JSON.stringify(metrics)}. Board: ${board?.name || "Untitled"}. Workflow: ${board?.template || "blank"}. Board data: ${JSON.stringify(snapshot)}`,
     {
@@ -267,6 +327,176 @@ aiRouter.get("/boards/:id/ai/summary", async (c) => {
       generatedAt: now.toISOString(),
       metrics,
     },
+    usage: {
+      used: subscription.aiRequestsThisMonth + 1,
+      limit,
+      plan: subscription.plan,
+    },
+  });
+});
+
+aiRouter.post("/workspaces/:id/ai/command-center", async (c) => {
+  const workspaceId = c.req.param("id");
+  await workspaceAccess(c.get("userId"), workspaceId, true);
+  await assertCollaborationAvailable(workspaceId);
+  const { subscription, limit } =
+    await workspaceAiAllowanceForWorkspace(workspaceId);
+  const workspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, workspaceId),
+    with: {
+      members: { with: { user: { columns: { passwordHash: false } } } },
+      boards: {
+        with: {
+          lists: {
+            orderBy: asc(lists.position),
+            with: {
+              cards: {
+                with: {
+                  members: {
+                    with: { user: { columns: { passwordHash: false } } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (!workspace) throw new HttpError(404, "Workspace not found");
+
+  const now = new Date();
+  const contributors = new Map(
+    workspace.members.map((member) => [
+      member.userId,
+      {
+        userId: member.userId,
+        name: member.user.name,
+        role: member.role,
+        assigned: 0,
+        completed: 0,
+        active: 0,
+        overdue: 0,
+        sources: [] as Array<{
+          boardId: string;
+          boardName: string;
+          assigned: number;
+          completed: number;
+          active: number;
+          overdue: number;
+        }>,
+      },
+    ]),
+  );
+  const boardSummaries = workspace.boards.map((board) => {
+    const boardCards = board.lists.flatMap((list) => list.cards);
+    const activeCards = boardCards.filter(
+      (card) => !card.isArchived && !card.isCompleted,
+    );
+    for (const card of boardCards) {
+      if (card.isArchived) continue;
+      for (const member of card.members) {
+        const assignment = contributors.get(member.userId);
+        if (!assignment) continue;
+        let source = assignment.sources.find(
+          (entry) => entry.boardId === board.id,
+        );
+        if (!source) {
+          source = {
+            boardId: board.id,
+            boardName: board.name,
+            assigned: 0,
+            completed: 0,
+            active: 0,
+            overdue: 0,
+          };
+          assignment.sources.push(source);
+        }
+        assignment.assigned += 1;
+        source.assigned += 1;
+        if (card.isCompleted) {
+          assignment.completed += 1;
+          source.completed += 1;
+        } else {
+          assignment.active += 1;
+          source.active += 1;
+        }
+        if (!card.isCompleted && card.dueDate && card.dueDate < now) {
+          assignment.overdue += 1;
+          source.overdue += 1;
+        }
+      }
+    }
+    return {
+      id: board.id,
+      name: board.name,
+      workflow: board.template,
+      total: boardCards.filter((card) => !card.isArchived).length,
+      completed: boardCards.filter(
+        (card) => !card.isArchived && card.isCompleted,
+      ).length,
+      active: activeCards.length,
+      overdue: activeCards.filter((card) => card.dueDate && card.dueDate < now)
+        .length,
+      highPriority: activeCards.filter(
+        (card) => card.priority === "high" || card.priority === "urgent",
+      ).length,
+      unassigned: activeCards.filter((card) => card.members.length === 0)
+        .length,
+    };
+  });
+  const memberContributions = [...contributors.values()];
+  const metrics = boardSummaries.reduce(
+    (total, board) => ({
+      boards: total.boards + 1,
+      total: total.total + board.total,
+      completed: total.completed + board.completed,
+      active: total.active + board.active,
+      overdue: total.overdue + board.overdue,
+      highPriority: total.highPriority + board.highPriority,
+      unassigned: total.unassigned + board.unassigned,
+    }),
+    {
+      boards: 0,
+      total: 0,
+      completed: 0,
+      active: 0,
+      overdue: 0,
+      highPriority: 0,
+      unassigned: 0,
+    },
+  );
+
+  const evidence = {
+    generatedAt: now.toISOString(),
+    period: "current non-archived card assignment state",
+    metrics,
+    boards: boardSummaries,
+    members: memberContributions,
+  };
+  const evidenceJson = JSON.stringify(evidence);
+  await reserveAiRequest(
+    subscription.userId,
+    subscription.plan,
+    "workspace_pulse",
+    evidenceJson.length,
+  );
+  const text = await openAiResponse(
+    `You are Danto's workspace operations analyst. Produce a concise business Workspace Pulse using only the supplied evidence. Explain what is progressing, what is late or unowned, where leadership attention is needed, and how current assignments are distributed across boards. Never rank people, assign performance scores, infer effort or hours worked, or treat assignment counts as employee performance. When discussing a person, state only their assigned, completed, active, and overdue card counts and the source boards. Mention data gaps plainly. Do not invent causes, dates, owners, or outcomes. Every string must be clean prose without Markdown bullets, asterisks, or hashtags. Workspace: ${workspace.name}. Evidence: ${evidenceJson}`,
+    {
+      schema: commandCenterJsonSchema,
+      schemaName: "workspace_command_center",
+    },
+  );
+  const brief = commandCenterSchema.parse(JSON.parse(text));
+  await recordAiUse(subscription.userId, subscription.aiRequestsThisMonth);
+  return c.json({
+    workspace: { id: workspace.id, name: workspace.name },
+    generatedAt: now.toISOString(),
+    metrics,
+    boards: boardSummaries,
+    contributors: memberContributions,
+    brief,
     usage: {
       used: subscription.aiRequestsThisMonth + 1,
       limit,

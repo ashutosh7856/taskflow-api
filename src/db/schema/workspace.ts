@@ -60,6 +60,24 @@ export const subscriptions = pgTable("subscriptions", {
     .notNull(),
 });
 
+export const aiUsageEvents = pgTable(
+  "ai_usage_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    feature: text("feature").notNull(),
+    inputCharacters: integer("input_characters").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("ai_usage_user_created_idx").on(table.userId, table.createdAt),
+  ],
+);
+
 export const billingPlans = pgTable("billing_plans", {
   plan: planEnum("plan").primaryKey(),
   paypalProductId: text("paypal_product_id").notNull(),

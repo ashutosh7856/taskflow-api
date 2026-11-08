@@ -1,4 +1,4 @@
-import { and, asc, eq, max, or } from "drizzle-orm";
+import { and, asc, eq, inArray, max } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 
@@ -6,10 +6,12 @@ import { db } from "../db";
 import {
   boardMembers,
   boards,
+  cardMembers,
   cards,
   labels,
   lists,
   users,
+  workspaceMembers,
 } from "../db/schema";
 import {
   boardAccess,
@@ -20,6 +22,10 @@ import {
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { recordActivity } from "../services/activity";
 import { frontendUrl, sendEmail } from "../services/email";
+import {
+  assertBoardCreationAvailable,
+  assertCollaborationAvailable,
+} from "../services/entitlements";
 import { memberSchema, nameSchema } from "../validators/common";
 
 const boardsRouter = new Hono<AppEnv>();
@@ -58,6 +64,7 @@ boardsRouter.get("/workspaces/:workspaceId/boards", async (c) => {
   const workspaceId = c.req.param("workspaceId");
   const userId = c.get("userId");
   await workspaceAccess(userId, workspaceId);
+  await assertBoardCreationAvailable(workspaceId);
 
   const rows = await db
     .select({ board: boards, role: boardMembers.role })
@@ -122,7 +129,7 @@ boardsRouter.post("/workspaces/:workspaceId/boards", async (c) => {
 
 boardsRouter.get("/boards/:id", async (c) => {
   const boardId = c.req.param("id");
-  await boardAccess(c.get("userId"), boardId);
+  const currentMembership = await boardAccess(c.get("userId"), boardId);
 
   const board = await db.query.boards.findFirst({
     where: eq(boards.id, boardId),
@@ -149,7 +156,21 @@ boardsRouter.get("/boards/:id", async (c) => {
     },
   });
 
-  return board ? c.json(board) : c.json({ error: "Board not found" }, 404);
+  if (!board) return c.json({ error: "Board not found" }, 404);
+
+  const workspacePeople =
+    currentMembership.role === "member"
+      ? []
+      : await db.query.workspaceMembers.findMany({
+          where: eq(workspaceMembers.workspaceId, board.workspaceId),
+          with: { user: { columns: { passwordHash: false } } },
+        });
+
+  return c.json({
+    ...board,
+    role: currentMembership.role,
+    workspaceMembers: workspacePeople,
+  });
 });
 
 boardsRouter.patch("/boards/:id", async (c) => {
@@ -188,6 +209,7 @@ boardsRouter.post("/boards/:id/members", async (c) => {
   const boardId = c.req.param("id");
   await boardAccess(c.get("userId"), boardId, true);
   const input = await body(c, memberSchema);
+  await assertCollaborationAvailable(await boardWorkspace(boardId));
 
   await workspaceAccess(input.userId, await boardWorkspace(boardId));
 
@@ -210,7 +232,7 @@ boardsRouter.post("/boards/:id/members", async (c) => {
         to: targetUser.email,
         subject: `You were added to ${board?.name || "a board"}`,
         title: "You have a new board",
-        message: `${actor?.name || "A teammate"} added you to ${board?.name || "a board"} on TaskFlow.`,
+        message: `${actor?.name || "A teammate"} added you to ${board?.name || "a board"} on Danto.`,
         actionLabel: "Open board",
         actionUrl: frontendUrl(`/boards/${boardId}`),
       })
@@ -221,17 +243,48 @@ boardsRouter.post("/boards/:id/members", async (c) => {
 
 boardsRouter.delete("/boards/:id/members/:userId", async (c) => {
   const boardId = c.req.param("id");
-  await boardAccess(c.get("userId"), boardId, true);
+  const userId = c.get("userId");
+  const targetUserId = c.req.param("userId");
+  await boardAccess(userId, boardId, true);
 
-  await db
-    .delete(boardMembers)
-    .where(
-      and(
-        eq(boardMembers.boardId, boardId),
-        eq(boardMembers.userId, c.req.param("userId")),
-        or(eq(boardMembers.role, "admin"), eq(boardMembers.role, "member")),
-      ),
-    );
+  const targetMembership = await db.query.boardMembers.findFirst({
+    where: and(
+      eq(boardMembers.boardId, boardId),
+      eq(boardMembers.userId, targetUserId),
+    ),
+  });
+  if (!targetMembership) throw new HttpError(404, "Board member not found");
+  if (targetMembership.role === "owner") {
+    throw new HttpError(400, "The board owner cannot be removed");
+  }
+
+  await db.transaction(async (tx) => {
+    const boardCardIds = tx
+      .select({ id: cards.id })
+      .from(cards)
+      .innerJoin(lists, eq(cards.listId, lists.id))
+      .where(eq(lists.boardId, boardId));
+    await tx
+      .delete(cardMembers)
+      .where(
+        and(
+          eq(cardMembers.userId, targetUserId),
+          inArray(cardMembers.cardId, boardCardIds),
+        ),
+      );
+    await tx
+      .delete(boardMembers)
+      .where(
+        and(
+          eq(boardMembers.boardId, boardId),
+          eq(boardMembers.userId, targetUserId),
+        ),
+      );
+  });
+
+  await recordActivity(userId, boardId, "board.member_removed", undefined, {
+    removedUserId: targetUserId,
+  });
 
   return c.body(null, 204);
 });

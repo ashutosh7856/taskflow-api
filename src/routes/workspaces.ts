@@ -12,7 +12,10 @@ import { workspaceAccess } from "../lib/access";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { nameSchema, memberSchema } from "../validators/common";
 import { frontendUrl, sendEmail } from "../services/email";
-import { assertWorkspaceSeatAvailable } from "../services/entitlements";
+import {
+  assertWorkspaceCreationAvailable,
+  assertWorkspaceSeatAvailable,
+} from "../services/entitlements";
 
 const workspacesRouter = new Hono<AppEnv>();
 
@@ -38,6 +41,7 @@ workspacesRouter.get("/workspaces", async (c) => {
 workspacesRouter.post("/workspaces", async (c) => {
   const input = await body(c, nameSchema);
   const userId = c.get("userId");
+  await assertWorkspaceCreationAvailable(userId);
 
   const workspace = await db.transaction(async (tx) => {
     const [created] = await tx
@@ -110,7 +114,8 @@ workspacesRouter.post("/workspaces/:id/members", async (c) => {
       eq(workspaceMembers.userId, input.userId),
     ),
   });
-  if (!existingMember) await assertWorkspaceSeatAvailable(workspaceId);
+  if (!existingMember)
+    await assertWorkspaceSeatAvailable(workspaceId, input.userId);
 
   const [membership] = await db
     .insert(workspaceMembers)
@@ -131,8 +136,8 @@ workspacesRouter.post("/workspaces/:id/members", async (c) => {
         to: targetUser.email,
         subject: `You were added to ${workspace?.name || "a workspace"}`,
         title: "You have a new workspace",
-        message: `${actor?.name || "A teammate"} added you to ${workspace?.name || "a workspace"} on TaskFlow.`,
-        actionLabel: "Open TaskFlow",
+        message: `${actor?.name || "A teammate"} added you to ${workspace?.name || "a workspace"} on Danto.`,
+        actionLabel: "Open Danto",
         actionUrl: frontendUrl("/"),
       })
     : { sent: false };
