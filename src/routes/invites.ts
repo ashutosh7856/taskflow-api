@@ -15,6 +15,7 @@ import { boardAccess, boardWorkspace, workspaceAccess } from "../lib/access";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { memberRoleSchema } from "../validators/common";
 import { frontendUrl, sendEmail } from "../services/email";
+import { assertWorkspaceSeatAvailable } from "../services/entitlements";
 
 const invitesRouter = new Hono<AppEnv>();
 
@@ -99,6 +100,21 @@ invitesRouter.post("/invites/:token/accept", async (c) => {
   }
 
   await db.transaction(async (tx) => {
+    const inviteWorkspaceId =
+      invite.scope === "workspace"
+        ? invite.workspaceId
+        : invite.boardId
+          ? await boardWorkspace(invite.boardId)
+          : null;
+    if (inviteWorkspaceId) {
+      const existing = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, inviteWorkspaceId),
+          eq(workspaceMembers.userId, user.id),
+        ),
+      });
+      if (!existing) await assertWorkspaceSeatAvailable(inviteWorkspaceId);
+    }
     if (invite.scope === "workspace" && invite.workspaceId) {
       await tx
         .insert(workspaceMembers)

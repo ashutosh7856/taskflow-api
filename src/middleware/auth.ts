@@ -2,7 +2,13 @@ import { createMiddleware } from "hono/factory";
 import { verify } from "hono/jwt";
 import type { AppEnv } from "../lib/http";
 
-const secret = () => process.env.JWT_SECRET || "development-only-change-me";
+const secret = () => {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("JWT_SECRET is required in production");
+  }
+  return "development-only-change-me";
+};
 
 export const auth = createMiddleware<AppEnv>(async (c, next) => {
   const value = c.req.header("Authorization");
@@ -10,7 +16,8 @@ export const auth = createMiddleware<AppEnv>(async (c, next) => {
     return c.json({ error: "Unauthorized" }, 401);
   try {
     const payload = await verify(value.slice(7), secret(), "HS256");
-    if (typeof payload.sub !== "string") throw new Error();
+    if (typeof payload.sub !== "string" || payload.type !== "access")
+      throw new Error();
     c.set("userId", payload.sub);
     await next();
   } catch {

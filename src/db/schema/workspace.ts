@@ -16,6 +16,19 @@ import { users } from "./user";
 
 export const roleEnum = pgEnum("role", ["owner", "admin", "member"]);
 export const inviteScopeEnum = pgEnum("invite_scope", ["workspace", "board"]);
+export const planEnum = pgEnum("plan", ["free", "pro", "business"]);
+export const billingStatusEnum = pgEnum("billing_status", [
+  "inactive",
+  "active",
+  "past_due",
+  "cancelled",
+]);
+export const priorityEnum = pgEnum("priority", [
+  "low",
+  "medium",
+  "high",
+  "urgent",
+]);
 
 export const workspaces = pgTable("workspaces", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -23,6 +36,36 @@ export const workspaces = pgTable("workspaces", {
   ownerId: uuid("owner_id")
     .references(() => users.id, { onDelete: "restrict" })
     .notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export const subscriptions = pgTable("subscriptions", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  plan: planEnum("plan").default("free").notNull(),
+  billingStatus: billingStatusEnum("billing_status")
+    .default("inactive")
+    .notNull(),
+  paypalSubscriptionId: text("paypal_subscription_id").unique(),
+  currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+  aiRequestsThisMonth: integer("ai_requests_this_month").default(0).notNull(),
+  aiPeriodStart: timestamp("ai_period_start", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export const billingPlans = pgTable("billing_plans", {
+  plan: planEnum("plan").primaryKey(),
+  paypalProductId: text("paypal_product_id").notNull(),
+  paypalPlanId: text("paypal_plan_id").notNull().unique(),
+  priceUsd: integer("price_usd").notNull(),
+  active: boolean("active").default(true).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
@@ -55,6 +98,7 @@ export const boards = pgTable("boards", {
     .notNull(),
   name: text("name").notNull(),
   backgroundColor: text("background_color").default("blue").notNull(),
+  template: text("template").default("blank").notNull(),
   createdBy: uuid("created_by").references(() => users.id, {
     onDelete: "set null",
   }),
@@ -110,7 +154,12 @@ export const cards = pgTable(
       onDelete: "set null",
     }),
     isArchived: boolean("is_archived").default(false).notNull(),
+    isCompleted: boolean("is_completed").default(false).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    category: text("category").default("task").notNull(),
     dueDate: timestamp("due_date", { withTimezone: true }),
+    priority: priorityEnum("priority").default("medium").notNull(),
+    estimateMinutes: integer("estimate_minutes"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),

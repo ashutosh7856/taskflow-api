@@ -3,7 +3,14 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { db } from "../db";
-import { boardMembers, boards, cards, lists, users } from "../db/schema";
+import {
+  boardMembers,
+  boards,
+  cards,
+  labels,
+  lists,
+  users,
+} from "../db/schema";
 import {
   boardAccess,
   boardWorkspace,
@@ -16,6 +23,36 @@ import { frontendUrl, sendEmail } from "../services/email";
 import { memberSchema, nameSchema } from "../validators/common";
 
 const boardsRouter = new Hono<AppEnv>();
+const boardTemplates = {
+  blank: [],
+  software: ["Backlog", "Ready", "In progress", "Review", "Done"],
+  marketing: ["Ideas", "Planned", "Creating", "Approval", "Published"],
+  operations: ["Requests", "Triage", "In progress", "Blocked", "Resolved"],
+} as const;
+const templateLabels = {
+  blank: [
+    { name: "Important", color: "#dc2626" },
+    { name: "Quick win", color: "#16a34a" },
+  ],
+  software: [
+    { name: "Bug", color: "#dc2626" },
+    { name: "Feature", color: "#2563eb" },
+    { name: "Tech debt", color: "#7c3aed" },
+    { name: "Blocked", color: "#111827" },
+  ],
+  marketing: [
+    { name: "Social", color: "#db2777" },
+    { name: "Email", color: "#7c3aed" },
+    { name: "Content", color: "#0891b2" },
+    { name: "Paid", color: "#ea580c" },
+  ],
+  operations: [
+    { name: "Incident", color: "#dc2626" },
+    { name: "Customer", color: "#2563eb" },
+    { name: "Internal", color: "#16a34a" },
+    { name: "Blocked", color: "#111827" },
+  ],
+} as const;
 
 boardsRouter.get("/workspaces/:workspaceId/boards", async (c) => {
   const workspaceId = c.req.param("workspaceId");
@@ -40,13 +77,19 @@ boardsRouter.post("/workspaces/:workspaceId/boards", async (c) => {
 
   const input = await body(
     c,
-    nameSchema.extend({ backgroundColor: z.string().min(1).default("blue") }),
+    nameSchema.extend({
+      backgroundColor: z.string().min(1).default("blue"),
+      template: z
+        .enum(["blank", "software", "marketing", "operations"])
+        .default("blank"),
+    }),
   );
+  const { template, ...boardInput } = input;
 
   const board = await db.transaction(async (tx) => {
     const [created] = await tx
       .insert(boards)
-      .values({ ...input, workspaceId, createdBy: userId })
+      .values({ ...boardInput, template, workspaceId, createdBy: userId })
       .returning();
 
     await tx.insert(boardMembers).values({
@@ -54,6 +97,22 @@ boardsRouter.post("/workspaces/:workspaceId/boards", async (c) => {
       userId,
       role: "owner",
     });
+    const templateLists = boardTemplates[template];
+    if (templateLists.length) {
+      await tx.insert(lists).values(
+        templateLists.map((name, position) => ({
+          boardId: created.id,
+          name,
+          position,
+        })),
+      );
+    }
+    await tx.insert(labels).values(
+      templateLabels[template].map((label) => ({
+        ...label,
+        boardId: created.id,
+      })),
+    );
 
     return created;
   });

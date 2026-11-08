@@ -2,11 +2,17 @@ import { and, eq, or } from "drizzle-orm";
 import { Hono } from "hono";
 
 import { db } from "../db";
-import { users, workspaceMembers, workspaces } from "../db/schema";
+import {
+  subscriptions,
+  users,
+  workspaceMembers,
+  workspaces,
+} from "../db/schema";
 import { workspaceAccess } from "../lib/access";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { nameSchema, memberSchema } from "../validators/common";
 import { frontendUrl, sendEmail } from "../services/email";
+import { assertWorkspaceSeatAvailable } from "../services/entitlements";
 
 const workspacesRouter = new Hono<AppEnv>();
 
@@ -17,10 +23,13 @@ workspacesRouter.get("/workspaces", async (c) => {
       name: workspaces.name,
       ownerId: workspaces.ownerId,
       role: workspaceMembers.role,
+      plan: subscriptions.plan,
+      billingStatus: subscriptions.billingStatus,
       createdAt: workspaces.createdAt,
     })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
+    .leftJoin(subscriptions, eq(subscriptions.userId, workspaces.ownerId))
     .where(eq(workspaceMembers.userId, c.get("userId")));
 
   return c.json(rows);
@@ -95,6 +104,13 @@ workspacesRouter.post("/workspaces/:id/members", async (c) => {
   const workspaceId = c.req.param("id");
   await workspaceAccess(c.get("userId"), workspaceId, true);
   const input = await body(c, memberSchema);
+  const existingMember = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      eq(workspaceMembers.userId, input.userId),
+    ),
+  });
+  if (!existingMember) await assertWorkspaceSeatAvailable(workspaceId);
 
   const [membership] = await db
     .insert(workspaceMembers)

@@ -16,6 +16,11 @@ const createCardSchema = z.object({
   description: z.string().optional(),
   position: z.number().int().optional(),
   dueDate: z.coerce.date().optional(),
+  priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
+  estimateMinutes: z.number().int().min(0).max(100000).nullable().optional(),
+  category: z.string().min(1).max(40).default("task"),
+  labelIds: z.array(z.string().uuid()).max(12).optional(),
+  isCompleted: z.boolean().optional(),
 });
 
 const updateCardSchema = z.object({
@@ -25,6 +30,10 @@ const updateCardSchema = z.object({
   position: z.number().int().optional(),
   listId: z.string().uuid().optional(),
   isArchived: z.boolean().optional(),
+  isCompleted: z.boolean().optional(),
+  category: z.string().min(1).max(40).optional(),
+  priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
+  estimateMinutes: z.number().int().min(0).max(100000).nullable().optional(),
 });
 
 cardsRouter.post("/lists/:listId/cards", async (c) => {
@@ -32,21 +41,46 @@ cardsRouter.post("/lists/:listId/cards", async (c) => {
   const userId = c.get("userId");
   const boardId = await listBoard(userId, listId);
   const input = await body(c, createCardSchema);
+  const { labelIds = [], ...cardInput } = input;
 
   const [{ highestPosition }] = await db
     .select({ highestPosition: max(cards.position) })
     .from(cards)
     .where(eq(cards.listId, listId));
 
-  const [card] = await db
-    .insert(cards)
-    .values({
-      ...input,
-      listId,
-      createdBy: userId,
-      position: input.position ?? Number(highestPosition ?? -1) + 1,
-    })
-    .returning();
+  if (labelIds.length) {
+    const validLabels = await db.query.labels.findMany({
+      where: (label, { and, eq, inArray }) =>
+        and(eq(label.boardId, boardId), inArray(label.id, labelIds)),
+    });
+    if (validLabels.length !== new Set(labelIds).size) {
+      throw new HttpError(
+        400,
+        "One or more labels do not belong to this board",
+      );
+    }
+  }
+  const card = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(cards)
+      .values({
+        ...cardInput,
+        listId,
+        createdBy: userId,
+        completedAt: cardInput.isCompleted ? new Date() : null,
+        position: cardInput.position ?? Number(highestPosition ?? -1) + 1,
+      })
+      .returning();
+    if (labelIds.length) {
+      await tx.insert(cardLabels).values(
+        [...new Set(labelIds)].map((labelId) => ({
+          cardId: created.id,
+          labelId,
+        })),
+      );
+    }
+    return created;
+  });
 
   await recordActivity(userId, boardId, "card.created", card.id);
   return c.json(card, 201);
@@ -88,7 +122,13 @@ cardsRouter.patch("/cards/:id", async (c) => {
 
   const [card] = await db
     .update(cards)
-    .set({ ...input, updatedAt: new Date() })
+    .set({
+      ...input,
+      ...(input.isCompleted === undefined
+        ? {}
+        : { completedAt: input.isCompleted ? new Date() : null }),
+      updatedAt: new Date(),
+    })
     .where(eq(cards.id, cardId))
     .returning();
 

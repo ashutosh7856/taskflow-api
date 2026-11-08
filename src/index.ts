@@ -2,20 +2,29 @@ import "dotenv/config";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { secureHeaders } from "hono/secure-headers";
 import { swaggerUI } from "@hono/swagger-ui";
 import authRoutes from "./routes/auth";
 import apiRoutes from "./routes/api";
 import { HttpError, type AppEnv } from "./lib/http";
 import { openApi } from "./openapi";
+import { paypalWebhook } from "./routes/billing";
 
 const app = new Hono<AppEnv>();
-app.use("*", logger(), cors());
+const allowedOrigin = process.env.FRONTEND_URL || "http://localhost:5173";
+app.use(
+  "*",
+  logger(),
+  secureHeaders(),
+  cors({ origin: allowedOrigin, credentials: true }),
+);
 app.get("/", (c) =>
   c.json({ name: "Trello API", docs: "/docs", health: "ok" }),
 );
 app.get("/openapi.json", (c) => c.json(openApi));
 app.get("/docs", swaggerUI({ url: "/openapi.json" }));
 app.route("/auth", authRoutes);
+app.route("/webhooks", paypalWebhook);
 app.route("/", apiRoutes);
 app.notFound((c) => c.json({ error: "Route not found" }, 404));
 app.onError((error, c) => {
