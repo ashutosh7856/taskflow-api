@@ -11,12 +11,30 @@ import { openApi } from "./openapi";
 import { paypalWebhook } from "./routes/billing";
 
 const app = new Hono<AppEnv>();
-const allowedOrigin = process.env.FRONTEND_URL || "http://localhost:5173";
+const allowedOrigins = new Set(
+  [
+    "https://taskflow-ui-b5u.pages.dev",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    process.env.FRONTEND_URL,
+    ...(process.env.CORS_ORIGINS || "").split(","),
+  ]
+    .filter((origin): origin is string => Boolean(origin?.trim()))
+    .map((origin) => origin.trim().replace(/\/$/, "")),
+);
 app.use(
   "*",
   logger(),
   secureHeaders(),
-  cors({ origin: allowedOrigin, credentials: true }),
+  cors({
+    origin: (origin) =>
+      allowedOrigins.has(origin.replace(/\/$/, "")) ? origin : null,
+    allowMethods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowHeaders: ["Authorization", "Content-Type"],
+    exposeHeaders: ["Content-Length"],
+    credentials: true,
+    maxAge: 86400,
+  }),
 );
 app.get("/", (c) =>
   c.json({ name: "Trello API", docs: "/docs", health: "ok" }),
