@@ -4,6 +4,17 @@ const iterations = 310_000;
 const keyLength = 32;
 const prefix = "pbkdf2-sha256";
 
+export function passwordHashFormat(encoded: string) {
+  if (encoded.startsWith(`${prefix}$`)) return "pbkdf2";
+  if (encoded.startsWith("$argon2")) return "argon2";
+  if (encoded.startsWith("$2")) return "bcrypt";
+  return "unknown";
+}
+
+export function passwordNeedsRehash(encoded: string) {
+  return passwordHashFormat(encoded) !== "pbkdf2";
+}
+
 function bytesToBase64(bytes: Uint8Array) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -48,7 +59,7 @@ export async function hashPassword(password: string) {
 }
 
 export async function verifyPassword(password: string, encoded: string) {
-  if (encoded.startsWith("$argon2") || encoded.startsWith("$2")) {
+  if (passwordNeedsRehash(encoded) && passwordHashFormat(encoded) !== "unknown") {
     // Bun.password created legacy hashes before the API moved to Workers.
     // This keeps Bun deployments compatible; legacy users need a password
     // reset after the API is moved to Cloudflare Workers.

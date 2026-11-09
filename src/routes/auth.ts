@@ -9,7 +9,12 @@ import { body, publicUser, type AppEnv } from "../lib/http";
 import { auth, jwtSecret } from "../middleware/auth";
 import { frontendUrl, sendEmail } from "../services/email";
 import { emailIsConfiguredAdmin } from "../services/admin";
-import { hashPassword, verifyPassword } from "../services/password";
+import {
+  hashPassword,
+  passwordHashFormat,
+  passwordNeedsRehash,
+  verifyPassword,
+} from "../services/password";
 
 const authRouter = new Hono<AppEnv>();
 
@@ -81,7 +86,18 @@ authRouter.post("/login", async (c) => {
     : false;
 
   if (!user || !passwordMatches) {
+    console.warn("Login rejected", {
+      userFound: Boolean(user),
+      passwordFormat: user ? passwordHashFormat(user.passwordHash) : null,
+    });
     return c.json({ error: "Invalid credentials" }, 401);
+  }
+
+  if (passwordNeedsRehash(user.passwordHash)) {
+    await db
+      .update(users)
+      .set({ passwordHash: await hashPassword(input.password) })
+      .where(eq(users.id, user.id));
   }
 
   await sendEmail({
