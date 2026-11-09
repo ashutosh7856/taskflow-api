@@ -1,6 +1,8 @@
 const algorithm = "PBKDF2";
 const digest = "SHA-256";
-const iterations = 310_000;
+// Cloudflare Workers' Web Crypto implementation supports at most 100,000
+// PBKDF2 iterations. Keep this at the platform maximum.
+const iterations = 100_000;
 const keyLength = 32;
 const prefix = "pbkdf2-sha256";
 
@@ -12,7 +14,9 @@ export function passwordHashFormat(encoded: string) {
 }
 
 export function passwordNeedsRehash(encoded: string) {
-  return passwordHashFormat(encoded) !== "pbkdf2";
+  if (passwordHashFormat(encoded) !== "pbkdf2") return true;
+  const rounds = Number(encoded.split("$")[1]);
+  return rounds !== iterations;
 }
 
 function bytesToBase64(bytes: Uint8Array) {
@@ -59,7 +63,8 @@ export async function hashPassword(password: string) {
 }
 
 export async function verifyPassword(password: string, encoded: string) {
-  if (passwordNeedsRehash(encoded) && passwordHashFormat(encoded) !== "unknown") {
+  const storedFormat = passwordHashFormat(encoded);
+  if (storedFormat === "argon2" || storedFormat === "bcrypt") {
     // Bun.password created legacy hashes before the API moved to Workers.
     // This keeps Bun deployments compatible; legacy users need a password
     // reset after the API is moved to Cloudflare Workers.

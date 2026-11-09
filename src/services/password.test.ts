@@ -27,6 +27,7 @@ describe("password hashing", () => {
     expect(passwordNeedsRehash("$argon2id$v=19$m=65536,t=2,p=1$salt$hash")).toBe(
       true,
     );
-    expect(passwordNeedsRehash("pbkdf2-sha256$310000$salt$hash")).toBe(false);
+    expect(passwordNeedsRehash("pbkdf2-sha256$310000$salt$hash")).toBe(true);
+    expect(passwordNeedsRehash("pbkdf2-sha256$100000$salt$hash")).toBe(false);
   });
 });
