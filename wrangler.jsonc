@@ -11,16 +11,6 @@
     "OPENAI_FALLBACK_MODEL": "gpt-6.1-sol",
     "PAYPAL_ENV": "sandbox"
   },
-  "secrets": {
-    "required": [
-      "DATABASE_URL",
-      "JWT_SECRET",
-      "OPENAI_API_KEY",
-      "PAYPAL_CLIENT_ID",
-      "PAYPAL_CLIENT_SECRET",
-      "RESEND_API_KEY"
-    ]
-  },
   "observability": {
     "enabled": true
   }

@@ -12,7 +12,6 @@ concurrency:
 jobs:
   test-and-deploy:
     runs-on: ubuntu-latest
-    environment: production
     timeout-minutes: 15
     permissions:
       contents: read
@@ -40,4 +39,5 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: 4.158.0
           command: deploy
