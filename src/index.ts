@@ -8,6 +8,7 @@ import apiRoutes from "./routes/api";
 import { HttpError, type AppEnv } from "./lib/http";
 import { openApi } from "./openapi";
 import { paypalWebhook } from "./routes/billing";
+import { withDatabase } from "./db";
 
 const app = new Hono<AppEnv>();
 const allowedOrigins = new Set(
@@ -37,6 +38,7 @@ app.use(
     maxAge: 86400,
   }),
 );
+app.use("*", async (_c, next) => withDatabase(next));
 app.get("/", (c) =>
   c.json({ name: "Trello API", docs: "/docs", health: "ok" }),
 );
@@ -52,7 +54,27 @@ app.onError((error, c) => {
       { error: error.message, details: error.details },
       error.status as any,
     );
-  console.error(error);
+  const databaseError = error as Error & {
+    code?: string;
+    detail?: string;
+    hint?: string;
+    schema_name?: string;
+    table_name?: string;
+    column_name?: string;
+    constraint_name?: string;
+  };
+  console.error("Unhandled API error", {
+    name: databaseError.name,
+    message: databaseError.message,
+    code: databaseError.code,
+    detail: databaseError.detail,
+    hint: databaseError.hint,
+    schema: databaseError.schema_name,
+    table: databaseError.table_name,
+    column: databaseError.column_name,
+    constraint: databaseError.constraint_name,
+    stack: databaseError.stack,
+  });
   return c.json({ error: "Internal server error" }, 500);
 });
 
