@@ -1,15 +1,47 @@
-import { eq } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 
 import { db } from "../db";
-import { billingPlans, subscriptions } from "../db/schema";
+import {
+  billingPlans,
+  discountCodes,
+  discountRedemptions,
+  paymentEvents,
+  subscriptions,
+} from "../db/schema";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { paypalConfigured, paypalRequest } from "../services/paypal";
-import { planCatalog } from "../services/entitlements";
+import { effectivePlan, planCatalog } from "../services/entitlements";
 
 const billingRouter = new Hono<AppEnv>();
 const paidPlanSchema = z.enum(["pro", "business"]);
+
+async function activeDiscount(code: string, plan: "pro" | "business") {
+  const normalized = code.trim().toUpperCase();
+  const discount = await db.query.discountCodes.findFirst({
+    where: and(
+      eq(discountCodes.code, normalized),
+      eq(discountCodes.active, true),
+    ),
+  });
+  const now = new Date();
+  if (
+    !discount ||
+    (discount.plan && discount.plan !== plan) ||
+    (discount.startsAt && discount.startsAt > now) ||
+    (discount.expiresAt && discount.expiresAt <= now) ||
+    (discount.maxRedemptions !== null &&
+      discount.redemptionCount >= discount.maxRedemptions)
+  ) {
+    throw new HttpError(400, "Discount code is invalid or no longer available");
+  }
+  return discount;
+}
+
+function discountedPrice(price: number, percentOff: number) {
+  return Math.max(1, Math.round(price * (100 - percentOff)) / 100);
+}
 
 async function accountSubscription(ownerId: string) {
   let subscription = await db.query.subscriptions.findFirst({
@@ -25,18 +57,19 @@ async function accountSubscription(ownerId: string) {
 
 billingRouter.get("/billing", async (c) => {
   const subscription = await accountSubscription(c.get("userId"));
+  const plan = effectivePlan(subscription);
   const plans = await db
     .select()
     .from(billingPlans)
     .where(eq(billingPlans.active, true));
   return c.json({
-    plan: subscription.plan,
+    plan,
     billingStatus: subscription.billingStatus,
     currentPeriodEnd: subscription.currentPeriodEnd,
     aiRequestsThisMonth: subscription.aiRequestsThisMonth,
     aiPeriodStart: subscription.aiPeriodStart,
     paypalSubscriptionId: subscription.paypalSubscriptionId,
-    entitlements: planCatalog[subscription.plan],
+    entitlements: planCatalog[plan],
     paypal: {
       configured: paypalConfigured(),
       clientId: process.env.PAYPAL_CLIENT_ID || null,
@@ -50,41 +83,159 @@ billingRouter.get("/billing", async (c) => {
   });
 });
 
+billingRouter.post("/billing/discounts/validate", async (c) => {
+  const { code, plan } = await body(
+    c,
+    z.object({ code: z.string().min(3).max(30), plan: paidPlanSchema }),
+  );
+  const discount = await activeDiscount(code, plan);
+  const priceUsd = planCatalog[plan].priceUsd;
+  return c.json({
+    code: discount.code,
+    percentOff: discount.percentOff,
+    regularPriceUsd: priceUsd,
+    firstPaymentUsd: discountedPrice(priceUsd, discount.percentOff),
+    duration: "first_payment",
+  });
+});
+
 billingRouter.post("/billing/paypal/setup", async (c) => {
   const userId = c.get("userId");
-  const { plan } = await body(c, z.object({ plan: paidPlanSchema }));
+  const { plan, discountCode } = await body(
+    c,
+    z.object({
+      plan: paidPlanSchema,
+      discountCode: z.string().min(3).max(30).optional(),
+    }),
+  );
+  const discount = discountCode
+    ? await activeDiscount(discountCode, plan)
+    : null;
   const existing = await db.query.billingPlans.findFirst({
     where: eq(billingPlans.plan, plan),
   });
   const priceUsd = planCatalog[plan].priceUsd;
-  if (existing && existing.priceUsd === priceUsd)
+  if (existing && existing.priceUsd === priceUsd && !discount)
     return c.json({
       plan,
       priceUsd: existing.priceUsd,
       paypalPlanId: existing.paypalPlanId,
     });
-  const product = await paypalRequest<{ id: string }>("/v1/catalogs/products", {
-    method: "POST",
-    headers: { "PayPal-Request-Id": `danto-${plan}-account-product-v3` },
-    body: JSON.stringify({
-      name: `Danto ${plan === "pro" ? "Pro" : "Team"}`,
-      description: "Danto account subscription covering all owned workspaces",
-      type: "SERVICE",
-      category: "SOFTWARE",
-    }),
-  });
+  let basePlan = existing;
+  if (!basePlan || basePlan.priceUsd !== priceUsd) {
+    const product = await paypalRequest<{ id: string }>(
+      "/v1/catalogs/products",
+      {
+        method: "POST",
+        headers: { "PayPal-Request-Id": `danto-${plan}-account-product-v3` },
+        body: JSON.stringify({
+          name: `Danto ${plan === "pro" ? "Pro" : "Team"}`,
+          description:
+            "Danto account subscription covering all owned workspaces",
+          type: "SERVICE",
+          category: "SOFTWARE",
+        }),
+      },
+    );
+    const paypalPlan = await paypalRequest<{ id: string }>(
+      "/v1/billing/plans",
+      {
+        method: "POST",
+        headers: { "PayPal-Request-Id": `danto-${plan}-account-monthly-v3` },
+        body: JSON.stringify({
+          product_id: product.id,
+          name: `Danto ${plan === "pro" ? "Pro" : "Team"} monthly`,
+          status: "ACTIVE",
+          billing_cycles: [
+            {
+              frequency: { interval_unit: "MONTH", interval_count: 1 },
+              tenure_type: "REGULAR",
+              sequence: 1,
+              total_cycles: 0,
+              pricing_scheme: {
+                fixed_price: {
+                  value: priceUsd.toFixed(2),
+                  currency_code: "USD",
+                },
+              },
+            },
+          ],
+          payment_preferences: {
+            auto_bill_outstanding: true,
+            payment_failure_threshold: 2,
+          },
+        }),
+      },
+    );
+    const [created] = existing
+      ? await db
+          .update(billingPlans)
+          .set({
+            paypalProductId: product.id,
+            paypalPlanId: paypalPlan.id,
+            priceUsd,
+            active: true,
+          })
+          .where(eq(billingPlans.plan, plan))
+          .returning()
+      : await db
+          .insert(billingPlans)
+          .values({
+            plan,
+            paypalProductId: product.id,
+            paypalPlanId: paypalPlan.id,
+            priceUsd,
+          })
+          .returning();
+    basePlan = created;
+  }
+  if (!discount) {
+    return c.json(
+      {
+        plan,
+        priceUsd: basePlan!.priceUsd,
+        paypalPlanId: basePlan!.paypalPlanId,
+      },
+      201,
+    );
+  }
+  const discountPlanField =
+    plan === "pro" ? "paypalProPlanId" : "paypalBusinessPlanId";
+  const cachedPlanId = discount[discountPlanField];
+  if (cachedPlanId) {
+    return c.json({
+      plan,
+      priceUsd,
+      firstPaymentUsd: discountedPrice(priceUsd, discount.percentOff),
+      discountCode: discount.code,
+      paypalPlanId: cachedPlanId,
+    });
+  }
+  const firstPaymentUsd = discountedPrice(priceUsd, discount.percentOff);
   const paypalPlan = await paypalRequest<{ id: string }>("/v1/billing/plans", {
     method: "POST",
-    headers: { "PayPal-Request-Id": `danto-${plan}-account-monthly-v3` },
+    headers: { "PayPal-Request-Id": `danto-${plan}-${discount.id}` },
     body: JSON.stringify({
-      product_id: product.id,
-      name: `Danto ${plan === "pro" ? "Pro" : "Team"} monthly`,
+      product_id: basePlan!.paypalProductId,
+      name: `Danto ${plan === "pro" ? "Pro" : "Team"} · ${discount.code}`,
       status: "ACTIVE",
       billing_cycles: [
         {
           frequency: { interval_unit: "MONTH", interval_count: 1 },
-          tenure_type: "REGULAR",
+          tenure_type: "TRIAL",
           sequence: 1,
+          total_cycles: 1,
+          pricing_scheme: {
+            fixed_price: {
+              value: firstPaymentUsd.toFixed(2),
+              currency_code: "USD",
+            },
+          },
+        },
+        {
+          frequency: { interval_unit: "MONTH", interval_count: 1 },
+          tenure_type: "REGULAR",
+          sequence: 2,
           total_cycles: 0,
           pricing_scheme: {
             fixed_price: { value: priceUsd.toFixed(2), currency_code: "USD" },
@@ -97,30 +248,17 @@ billingRouter.post("/billing/paypal/setup", async (c) => {
       },
     }),
   });
-  const [created] = existing
-    ? await db
-        .update(billingPlans)
-        .set({
-          paypalProductId: product.id,
-          paypalPlanId: paypalPlan.id,
-          priceUsd,
-          active: true,
-        })
-        .where(eq(billingPlans.plan, plan))
-        .returning()
-    : await db
-        .insert(billingPlans)
-        .values({
-          plan,
-          paypalProductId: product.id,
-          paypalPlanId: paypalPlan.id,
-          priceUsd,
-        })
-        .returning();
-  return c.json(
-    { plan, priceUsd: created.priceUsd, paypalPlanId: created.paypalPlanId },
-    201,
-  );
+  await db
+    .update(discountCodes)
+    .set({ [discountPlanField]: paypalPlan.id, updatedAt: new Date() })
+    .where(eq(discountCodes.id, discount.id));
+  return c.json({
+    plan,
+    priceUsd,
+    firstPaymentUsd,
+    discountCode: discount.code,
+    paypalPlanId: paypalPlan.id,
+  });
 });
 
 billingRouter.post("/billing/paypal/activate", async (c) => {
@@ -136,17 +274,32 @@ billingRouter.post("/billing/paypal/activate", async (c) => {
     throw new HttpError(409, "The PayPal subscription is not active yet");
   if (paypalSubscription.custom_id && paypalSubscription.custom_id !== userId)
     throw new HttpError(400, "Subscription account mismatch");
-  const plan = await db.query.billingPlans.findFirst({
+  const basePlan = await db.query.billingPlans.findFirst({
     where: eq(billingPlans.paypalPlanId, paypalSubscription.plan_id),
   });
-  if (!plan || plan.plan === "free")
-    throw new HttpError(400, "Unknown PayPal plan");
+  const discount = basePlan
+    ? null
+    : await db.query.discountCodes.findFirst({
+        where: or(
+          eq(discountCodes.paypalProPlanId, paypalSubscription.plan_id),
+          eq(discountCodes.paypalBusinessPlanId, paypalSubscription.plan_id),
+        ),
+      });
+  const plan =
+    basePlan?.plan ||
+    (discount?.paypalProPlanId === paypalSubscription.plan_id
+      ? "pro"
+      : discount?.paypalBusinessPlanId === paypalSubscription.plan_id
+        ? "business"
+        : null);
+  if (!plan || plan === "free") throw new HttpError(400, "Unknown PayPal plan");
   const [subscription] = await db
     .update(subscriptions)
     .set({
-      plan: plan.plan,
+      plan,
       billingStatus: "active",
       paypalSubscriptionId: subscriptionId,
+      discountCodeId: discount?.id || null,
       currentPeriodEnd: paypalSubscription.billing_info?.next_billing_time
         ? new Date(paypalSubscription.billing_info.next_billing_time)
         : null,
@@ -154,6 +307,22 @@ billingRouter.post("/billing/paypal/activate", async (c) => {
     })
     .where(eq(subscriptions.userId, userId))
     .returning();
+  if (discount) {
+    const inserted = await db
+      .insert(discountRedemptions)
+      .values({ discountCodeId: discount.id, userId, plan })
+      .onConflictDoNothing()
+      .returning({ id: discountRedemptions.id });
+    if (inserted.length) {
+      await db
+        .update(discountCodes)
+        .set({
+          redemptionCount: sql`${discountCodes.redemptionCount} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(discountCodes.id, discount.id));
+    }
+  }
   return c.json(subscription);
 });
 
@@ -198,6 +367,36 @@ paypalWebhook.post("/paypal", async (c) => {
   );
   if (verification.verification_status !== "SUCCESS")
     throw new HttpError(400, "Invalid PayPal webhook signature");
+  if (
+    ["PAYMENT.SALE.COMPLETED", "PAYMENT.SALE.REFUNDED"].includes(
+      event.event_type,
+    ) &&
+    event.resource?.amount?.total
+  ) {
+    const providerSubscriptionId = event.resource.billing_agreement_id || null;
+    const account = providerSubscriptionId
+      ? await db.query.subscriptions.findFirst({
+          where: eq(subscriptions.paypalSubscriptionId, providerSubscriptionId),
+        })
+      : null;
+    await db
+      .insert(paymentEvents)
+      .values({
+        provider: "paypal",
+        providerEventId: event.id,
+        providerSubscriptionId,
+        userId: account?.userId || null,
+        plan: account?.plan || null,
+        status:
+          event.event_type === "PAYMENT.SALE.COMPLETED"
+            ? "completed"
+            : "refunded",
+        amount: String(event.resource.amount.total),
+        currency: event.resource.amount.currency || "USD",
+        occurredAt: new Date(event.create_time || Date.now()),
+      })
+      .onConflictDoNothing();
+  }
   const subscriptionId = event.resource?.id;
   if (subscriptionId) {
     const statusMap: Record<string, "active" | "past_due" | "cancelled"> = {
@@ -213,7 +412,6 @@ paypalWebhook.post("/paypal", async (c) => {
         .update(subscriptions)
         .set({
           billingStatus: status,
-          ...(status === "active" ? {} : { plan: "free" as const }),
           updatedAt: new Date(),
         })
         .where(eq(subscriptions.paypalSubscriptionId, subscriptionId));

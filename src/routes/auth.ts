@@ -8,6 +8,8 @@ import { users } from "../db/schema";
 import { body, publicUser, type AppEnv } from "../lib/http";
 import { auth, jwtSecret } from "../middleware/auth";
 import { frontendUrl, sendEmail } from "../services/email";
+import { emailIsConfiguredAdmin } from "../services/admin";
+import { hashPassword, verifyPassword } from "../services/password";
 
 const authRouter = new Hono<AppEnv>();
 
@@ -32,6 +34,17 @@ async function createTokens(userId: string) {
   return { accessToken, refreshToken };
 }
 
+function sessionUser<T extends { email: string; passwordHash?: string }>(
+  user: T,
+) {
+  return {
+    ...publicUser(user),
+    isAdmin:
+      Boolean((user as T & { isAdmin?: boolean }).isAdmin) ||
+      emailIsConfiguredAdmin(user.email),
+  };
+}
+
 authRouter.post("/register", async (c) => {
   const input = await body(
     c,
@@ -48,12 +61,12 @@ authRouter.post("/register", async (c) => {
     .values({
       name: input.name,
       email: input.email,
-      passwordHash: await Bun.password.hash(input.password),
+      passwordHash: await hashPassword(input.password),
     })
     .returning();
 
   return c.json(
-    { user: publicUser(user), ...(await createTokens(user.id)) },
+    { user: sessionUser(user), ...(await createTokens(user.id)) },
     201,
   );
 });
@@ -64,7 +77,7 @@ authRouter.post("/login", async (c) => {
     where: eq(users.email, input.email),
   });
   const passwordMatches = user
-    ? await Bun.password.verify(input.password, user.passwordHash)
+    ? await verifyPassword(input.password, user.passwordHash)
     : false;
 
   if (!user || !passwordMatches) {
@@ -80,7 +93,7 @@ authRouter.post("/login", async (c) => {
     actionUrl: frontendUrl("/"),
   });
 
-  return c.json({ user: publicUser(user), ...(await createTokens(user.id)) });
+  return c.json({ user: sessionUser(user), ...(await createTokens(user.id)) });
 });
 
 authRouter.post("/refresh", async (c) => {
@@ -105,7 +118,7 @@ authRouter.get("/me", auth, async (c) => {
     where: eq(users.id, c.get("userId")),
   });
   return user
-    ? c.json(publicUser(user))
+    ? c.json(sessionUser(user))
     : c.json({ error: "User not found" }, 404);
 });
 

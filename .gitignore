@@ -3,6 +3,8 @@ node_modules/
 
 # local environment and build artifacts
 .env
+.dev.vars
+.dev.vars.*
 dist/
 *.local
 *.tsbuildinfo

@@ -4,6 +4,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgEnum,
   pgTable,
   primaryKey,
@@ -50,6 +51,7 @@ export const subscriptions = pgTable("subscriptions", {
     .default("inactive")
     .notNull(),
   paypalSubscriptionId: text("paypal_subscription_id").unique(),
+  discountCodeId: uuid("discount_code_id"),
   currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
   aiRequestsThisMonth: integer("ai_requests_this_month").default(0).notNull(),
   aiPeriodStart: timestamp("ai_period_start", { withTimezone: true })
@@ -69,12 +71,89 @@ export const aiUsageEvents = pgTable(
       .notNull(),
     feature: text("feature").notNull(),
     inputCharacters: integer("input_characters").default(0).notNull(),
+    inputTokens: integer("input_tokens").default(0).notNull(),
+    outputTokens: integer("output_tokens").default(0).notNull(),
+    estimatedCostMicrousd: integer("estimated_cost_microusd")
+      .default(0)
+      .notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
   (table) => [
     index("ai_usage_user_created_idx").on(table.userId, table.createdAt),
+  ],
+);
+
+export const discountCodes = pgTable(
+  "discount_codes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    code: text("code").notNull().unique(),
+    percentOff: integer("percent_off").notNull(),
+    plan: planEnum("discount_plan"),
+    maxRedemptions: integer("max_redemptions"),
+    redemptionCount: integer("redemption_count").default(0).notNull(),
+    active: boolean("active").default(true).notNull(),
+    startsAt: timestamp("starts_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    paypalProPlanId: text("paypal_pro_plan_id").unique(),
+    paypalBusinessPlanId: text("paypal_business_plan_id").unique(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index("discount_code_active_idx").on(table.active, table.code)],
+);
+
+export const discountRedemptions = pgTable(
+  "discount_redemptions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    discountCodeId: uuid("discount_code_id")
+      .references(() => discountCodes.id, { onDelete: "restrict" })
+      .notNull(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    plan: planEnum("plan").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("discount_redemption_code_user_idx").on(
+      table.discountCodeId,
+      table.userId,
+    ),
+  ],
+);
+
+export const paymentEvents = pgTable(
+  "payment_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    provider: text("provider").notNull(),
+    providerEventId: text("provider_event_id").notNull().unique(),
+    providerSubscriptionId: text("provider_subscription_id"),
+    userId: uuid("user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    plan: planEnum("plan"),
+    status: text("status").notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("payment_event_occurred_idx").on(table.occurredAt),
+    index("payment_event_user_idx").on(table.userId),
   ],
 );
 

@@ -11,6 +11,7 @@ import labelsAndActivityRouter from "./labels-and-activity";
 import workspacesRouter from "./workspaces";
 import aiRouter from "./ai";
 import billingRouter from "./billing";
+import adminRouter from "./admin";
 
 const api = new Hono<AppEnv>();
 
@@ -24,5 +25,6 @@ api.route("/", labelsAndActivityRouter);
 api.route("/", invitesRouter);
 api.route("/", aiRouter);
 api.route("/", billingRouter);
+api.route("/", adminRouter);
 
 export default api;

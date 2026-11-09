@@ -17,6 +17,7 @@ type PlanEntitlements = {
   workspaces: number | null;
   boards: number | null;
   collaboration: boolean;
+  workspacePulse: boolean;
   aiHourlyRequests: number;
   aiDailyRequests: number;
 };
@@ -25,34 +26,54 @@ export const planCatalog: Record<Plan, PlanEntitlements> = {
   free: {
     priceUsd: 0,
     seats: 1,
-    aiRequests: 20,
+    aiRequests: 10,
     workspaces: 1,
     boards: 3,
     collaboration: false,
+    workspacePulse: false,
     aiHourlyRequests: 10,
     aiDailyRequests: 20,
   },
   pro: {
-    priceUsd: 9,
-    seats: 1,
-    aiRequests: 500,
+    priceUsd: 12,
+    seats: 3,
+    aiRequests: 300,
     workspaces: 5,
     boards: null,
-    collaboration: false,
+    collaboration: true,
+    workspacePulse: false,
     aiHourlyRequests: 30,
-    aiDailyRequests: 100,
+    aiDailyRequests: 75,
   },
   business: {
-    priceUsd: 24,
-    seats: 25,
-    aiRequests: null,
+    priceUsd: 39,
+    seats: 10,
+    aiRequests: 1500,
     workspaces: null,
     boards: null,
     collaboration: true,
-    aiHourlyRequests: 40,
-    aiDailyRequests: 200,
+    workspacePulse: true,
+    aiHourlyRequests: 60,
+    aiDailyRequests: 250,
   },
 };
+
+export function effectivePlan(subscription?: {
+  plan: Plan;
+  billingStatus: "inactive" | "active" | "past_due" | "cancelled";
+  currentPeriodEnd: Date | null;
+}): Plan {
+  if (!subscription) return "free";
+  if (
+    (subscription.billingStatus === "cancelled" ||
+      subscription.billingStatus === "past_due") &&
+    (!subscription.currentPeriodEnd ||
+      subscription.currentPeriodEnd <= new Date())
+  ) {
+    return "free";
+  }
+  return subscription.plan;
+}
 
 export function hasSeatCapacity(
   currentSeats: number,
@@ -65,7 +86,7 @@ async function ownerPlan(ownerId: string): Promise<Plan> {
   const subscription = await db.query.subscriptions.findFirst({
     where: eq(subscriptions.userId, ownerId),
   });
-  return subscription?.plan || "free";
+  return effectivePlan(subscription);
 }
 
 export async function assertWorkspaceCreationAvailable(ownerId: string) {
@@ -112,9 +133,9 @@ export async function assertCollaborationAvailable(workspaceId: string) {
   if (!workspace) throw new HttpError(404, "Workspace not found");
   const plan = await ownerPlan(workspace.ownerId);
   if (!planCatalog[plan].collaboration) {
-    throw new HttpError(402, "Collaboration requires the Team plan", {
+    throw new HttpError(402, "Collaboration requires the Pro or Team plan", {
       upgradeRequired: true,
-      requiredPlan: "business",
+      requiredPlan: "pro",
     });
   }
   return { workspace, plan };
@@ -147,8 +168,23 @@ export async function assertWorkspaceSeatAvailable(
   if (!hasSeatCapacity(Number(seats), plan)) {
     throw new HttpError(
       402,
-      `${planCatalog[plan].seats}-person account limit reached for the Team plan`,
+      `${planCatalog[plan].seats}-person account limit reached for the ${plan === "business" ? "Team" : "Pro"} plan`,
       { upgradeRequired: true, seats: planCatalog[plan].seats },
     );
   }
+}
+
+export async function assertWorkspacePulseAvailable(workspaceId: string) {
+  const workspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, workspaceId),
+  });
+  if (!workspace) throw new HttpError(404, "Workspace not found");
+  const plan = await ownerPlan(workspace.ownerId);
+  if (!planCatalog[plan].workspacePulse) {
+    throw new HttpError(402, "Workspace Pulse requires the Team plan", {
+      upgradeRequired: true,
+      requiredPlan: "business",
+    });
+  }
+  return { workspace, plan };
 }
