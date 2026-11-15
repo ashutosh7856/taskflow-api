@@ -42,6 +42,10 @@ import {
 } from "../services/entitlements";
 import { issuePasswordReset } from "../services/password-reset";
 import { receiptNumber, sendReceipt } from "../services/receipts";
+import {
+  createDiscountSchema,
+  updateDiscountSchema,
+} from "../validators/discounts";
 import { runWeeklyUpdates } from "../services/client-updates";
 
 const adminRouter = new Hono<AppEnv>();
@@ -804,25 +808,8 @@ adminRouter.get("/admin/discounts", async (c) => {
   );
 });
 
-const discountSchema = z.object({
-  code: z
-    .string()
-    .min(3)
-    .max(30)
-    .regex(/^[A-Za-z0-9_-]+$/)
-    .transform((value) => value.toUpperCase()),
-  percentOff: z.number().int().min(5).max(90),
-  plan: z.enum(["pro", "business"]).nullable().optional(),
-  maxRedemptions: z.number().int().positive().nullable().optional(),
-  startsAt: z.string().datetime().nullable().optional(),
-  expiresAt: z.string().datetime().nullable().optional(),
-});
-
 adminRouter.post("/admin/discounts", async (c) => {
-  const input = await body(c, discountSchema);
-  if (input.startsAt && input.expiresAt && input.startsAt >= input.expiresAt) {
-    throw new HttpError(400, "Expiry must be after the start date");
-  }
+  const input = await body(c, createDiscountSchema);
   const existing = await db.query.discountCodes.findFirst({
     where: eq(discountCodes.code, input.code),
   });
@@ -845,14 +832,7 @@ adminRouter.post("/admin/discounts", async (c) => {
 });
 
 adminRouter.patch("/admin/discounts/:id", async (c) => {
-  const input = await body(
-    c,
-    z.object({
-      active: z.boolean().optional(),
-      maxRedemptions: z.number().int().positive().nullable().optional(),
-      expiresAt: z.string().datetime().nullable().optional(),
-    }),
-  );
+  const input = await body(c, updateDiscountSchema);
   const [updated] = await db
     .update(discountCodes)
     .set({
