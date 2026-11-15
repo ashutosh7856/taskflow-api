@@ -59,8 +59,8 @@ export const createDiscountSchema = z
       z
         .number({ message: "% off is required" })
         .int("% off must be a whole number")
-        .min(5, "% off must be between 5 and 90")
-        .max(90, "% off must be between 5 and 90"),
+        .min(5, "% off must be between 5 and 95")
+        .max(95, "% off must be between 5 and 95"),
     ),
     plan: discountPlanSchema,
     maxRedemptions,

@@ -98,9 +98,9 @@ describe("create discount: field normalisation", () => {
     expect(parse({ code: "FOREVER", percentOff: 30, expiresAt: "" }).data?.expiresAt).toBeNull();
   });
 
-  test("the boundaries 5% and 90% are allowed", () => {
+  test("the boundaries 5% and 95% are allowed", () => {
     expect(parse(formPayload({ percentOff: "5" })).success).toBe(true);
-    expect(parse(formPayload({ percentOff: "90" })).success).toBe(true);
+    expect(parse(formPayload({ percentOff: "95" })).success).toBe(true);
   });
 });
 
@@ -109,10 +109,11 @@ describe("create discount: bad input names the problem", () => {
     ["code too short", formPayload({ code: "AB" }), "Code must be at least 3 characters"],
     ["code with a space", { code: "SAVE 20", percentOff: 20 }, "Code can only use letters, numbers, - and _"],
     ["code missing", { percentOff: 20 }, "Code is required"],
-    ["100% off", formPayload({ percentOff: "100" }), "% off must be between 5 and 90"],
-    ["3% off", formPayload({ percentOff: "3" }), "% off must be between 5 and 90"],
+    ["100% off", formPayload({ percentOff: "100" }), "% off must be between 5 and 95"],
+    ["96% off", formPayload({ percentOff: "96" }), "% off must be between 5 and 95"],
+    ["3% off", formPayload({ percentOff: "3" }), "% off must be between 5 and 95"],
     ["12.5% off", formPayload({ percentOff: "12.5" }), "% off must be a whole number"],
-    ["% off left empty", formPayload({ percentOff: "" }), "% off must be between 5 and 90"],
+    ["% off left empty", formPayload({ percentOff: "" }), "% off must be between 5 and 95"],
     ["fractional max uses", formPayload({ maxRedemptions: "2.5" }), "Max uses must be a whole number"],
     ["negative max uses", formPayload({ maxRedemptions: "-1" }), "Max uses must be at least 1"],
     ["bad expiry", { code: "BADDATE", percentOff: 20, expiresAt: "next week" }, "Use a valid date"],
@@ -155,9 +156,9 @@ describe("request body errors", () => {
   });
 
   test("custom messages are passed through untouched", async () => {
-    const error = await body(request(formPayload({ percentOff: "95" })), createDiscountSchema).catch(
+    const error = await body(request(formPayload({ percentOff: "96" })), createDiscountSchema).catch(
       (e) => e,
     );
-    expect(error.message).toBe("% off must be between 5 and 90");
+    expect(error.message).toBe("% off must be between 5 and 95");
   });
 });
