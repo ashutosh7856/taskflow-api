@@ -13,15 +13,16 @@
   // Query caching stays OFF: boards are edited collaboratively, and a cached
   // SELECT right after a write would show stale cards. Safe caching is done in
   // code instead (src/lib/cache.ts).
-  // then paste the returned id below and uncomment.
-  // "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<your-hyperdrive-id>" }],
+  "hyperdrive": [
+    { "binding": "HYPERDRIVE", "id": "418f3c204e2b480388f1f57a6af5d1a2" }
+  ],
   "upload_source_maps": true,
   "vars": {
     "FRONTEND_URL": "https://danto.app",
     "CORS_ORIGINS": "https://danto.app,https://www.danto.app,https://taskflow-ui-b5u.pages.dev",
-    "OPENAI_MODEL": "gpt-6-luna",
+    "OPENAI_MODEL": "gpt-4o-mini",
     "OPENAI_FALLBACK_MODEL": "gpt-6.1-sol",
-    "PAYPAL_ENV": "sandbox"
+    "PAYPAL_ENV": "live"
   },
   "observability": {
     "enabled": true
