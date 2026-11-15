@@ -13,6 +13,7 @@ import aiRouter from "./ai";
 import billingRouter from "./billing";
 import adminRouter from "./admin";
 import portalRouter from "./portal";
+import filesRouter from "./files";
 
 const api = new Hono<AppEnv>();
 
@@ -27,6 +28,7 @@ api.route("/", invitesRouter);
 api.route("/", aiRouter);
 api.route("/", billingRouter);
 api.route("/", portalRouter);
+api.route("/", filesRouter);
 // adminRouter guards "*" with an admin check, so it must stay mounted last.
 api.route("/", adminRouter);
 

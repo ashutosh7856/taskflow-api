@@ -20,6 +20,7 @@ import {
   workspaceAccess,
 } from "../lib/access";
 import { invalidateEdge } from "../lib/cache";
+import { purgeFiles } from "../services/storage";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { recordActivity } from "../services/activity";
 import { frontendUrl, sendEmail } from "../services/email";
@@ -208,6 +209,7 @@ boardsRouter.delete("/boards/:id", async (c) => {
     throw new HttpError(403, "Only the owner can delete a board");
   }
 
+  await purgeFiles({ boardId });
   const [deleted] = await db
     .delete(boards)
     .where(eq(boards.id, boardId))
@@ -356,6 +358,11 @@ boardsRouter.delete("/lists/:id", async (c) => {
   const userId = c.get("userId");
   const boardId = await listBoard(userId, listId, true);
 
+  const listCards = await db
+    .select({ id: cards.id })
+    .from(cards)
+    .where(eq(cards.listId, listId));
+  await purgeFiles({ cardIds: listCards.map((card) => card.id) });
   await db.delete(lists).where(eq(lists.id, listId));
   await recordActivity(userId, boardId, "list.deleted", undefined, { listId });
   return c.body(null, 204);

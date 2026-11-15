@@ -11,6 +11,7 @@ import {
 } from "../db/schema";
 import { workspaceAccess } from "../lib/access";
 import { invalidateEdge } from "../lib/cache";
+import { purgeFiles } from "../services/storage";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { nameSchema, memberSchema } from "../validators/common";
 import { frontendUrl, sendEmail } from "../services/email";
@@ -106,6 +107,7 @@ workspacesRouter.delete("/workspaces/:id", async (c) => {
     .select({ portalToken: boards.portalToken })
     .from(boards)
     .where(eq(boards.workspaceId, workspaceId));
+  await purgeFiles({ workspaceId });
   await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
   // Boards cascade with the workspace; clear their cached public portals.
   await Promise.all(

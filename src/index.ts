@@ -9,6 +9,9 @@ import { HttpError, type AppEnv } from "./lib/http";
 import { openApi } from "./openapi";
 import { paypalWebhook } from "./routes/billing";
 import { publicPortal } from "./routes/portal";
+import { publicFiles } from "./routes/files";
+import { type FileBucket, useBucket } from "./services/storage";
+import { runWeeklyUpdates } from "./services/client-updates";
 import { withDatabase } from "./db";
 
 const app = new Hono<AppEnv>();
@@ -25,10 +28,13 @@ const allowedOrigins = new Set(
     .filter((origin): origin is string => Boolean(origin?.trim()))
     .map((origin) => origin.trim().replace(/\/$/, "")),
 );
+const secure = secureHeaders();
 app.use(
   "*",
   logger(),
-  secureHeaders(),
+  // Signed file links set their own headers: they must be embeddable as
+  // <img>/<video> from the web app's origin.
+  (c, next) => (c.req.path.startsWith("/files/") ? next() : secure(c, next)),
   cors({
     origin: (origin) =>
       allowedOrigins.has(origin.replace(/\/$/, "")) ? origin : null,
@@ -41,7 +47,9 @@ app.use(
 );
 app.use("*", async (c, next) => {
   const env = c.env as
-    { HYPERDRIVE?: { connectionString: string } } | undefined;
+    | { HYPERDRIVE?: { connectionString: string }; FILES?: FileBucket }
+    | undefined;
+  useBucket(env?.FILES, Boolean(env?.HYPERDRIVE));
   let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
   try {
     const ctx = c.executionCtx;
@@ -62,6 +70,7 @@ app.get("/docs", swaggerUI({ url: "/openapi.json" }));
 app.route("/auth", authRoutes);
 app.route("/webhooks", paypalWebhook);
 app.route("/portal", publicPortal);
+app.route("/files", publicFiles);
 app.route("/", apiRoutes);
 app.notFound((c) => c.json({ error: "Route not found" }, 404));
 app.onError((error, c) => {
@@ -97,4 +106,25 @@ app.onError((error, c) => {
   return c.json({ error: "Internal server error" }, 500);
 });
 
-export default app;
+type WorkerEnv = {
+  HYPERDRIVE?: { connectionString: string };
+  FILES?: FileBucket;
+};
+
+export default {
+  fetch: app.fetch,
+  /** Cloudflare Cron Trigger (see wrangler.jsonc): Friday client updates. */
+  async scheduled(
+    _event: unknown,
+    env: WorkerEnv,
+    ctx: { waitUntil(promise: Promise<unknown>): void },
+  ) {
+    useBucket(env.FILES, true);
+    ctx.waitUntil(
+      withDatabase(() => runWeeklyUpdates(), {
+        connectionString: env.HYPERDRIVE?.connectionString,
+        waitUntil: ctx.waitUntil.bind(ctx),
+      }),
+    );
+  },
+};

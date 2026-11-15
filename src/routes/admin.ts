@@ -42,6 +42,7 @@ import {
 } from "../services/entitlements";
 import { issuePasswordReset } from "../services/password-reset";
 import { receiptNumber, sendReceipt } from "../services/receipts";
+import { runWeeklyUpdates } from "../services/client-updates";
 
 const adminRouter = new Hono<AppEnv>();
 adminRouter.use("*", async (c, next) => {
@@ -688,6 +689,15 @@ adminRouter.post("/admin/payments/:id/receipt", async (c) => {
     receipt: receiptNumber(payment),
   });
   return c.json({ sent: result.sent });
+});
+
+/** Runs the Friday client-update job now (it skips boards already sent). */
+adminRouter.post("/admin/jobs/weekly-updates", async (c) => {
+  const results = await runWeeklyUpdates();
+  await audit(c.get("userId"), "jobs.weekly_updates_run", null, {
+    sent: results.filter((row) => row.status === "sent").length,
+  });
+  return c.json(results);
 });
 
 /** Every user as CSV, for spreadsheets or email tools. */

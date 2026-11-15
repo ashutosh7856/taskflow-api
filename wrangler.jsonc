@@ -16,6 +16,11 @@
   "hyperdrive": [
     { "binding": "HYPERDRIVE", "id": "418f3c204e2b480388f1f57a6af5d1a2" }
   ],
+  // Card files for client proofing (off until R2 is enabled on the account).
+  // To turn on: `npx wrangler r2 bucket create danto-files`, then uncomment:
+  // "r2_buckets": [{ "binding": "FILES", "bucket_name": "danto-files" }],
+  // Friday 09:00 UTC: automatic AI client updates (src/services/client-updates.ts).
+  "triggers": { "crons": ["0 9 * * 5"] },
   "upload_source_maps": true,
   "vars": {
     "FRONTEND_URL": "https://danto.app",

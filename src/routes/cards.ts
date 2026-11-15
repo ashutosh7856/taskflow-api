@@ -12,6 +12,7 @@ import {
   users,
 } from "../db/schema";
 import { boardAccess, cardBoard, listBoard } from "../lib/access";
+import { purgeFiles } from "../services/storage";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { recordActivity } from "../services/activity";
 import { frontendUrl, sendEmail } from "../services/email";
@@ -150,6 +151,7 @@ cardsRouter.delete("/cards/:id", async (c) => {
   const boardId = await cardBoard(userId, cardId, true);
 
   await recordActivity(userId, boardId, "card.deleted", undefined, { cardId });
+  await purgeFiles({ cardIds: [cardId] });
   await db.delete(cards).where(eq(cards.id, cardId));
   return c.body(null, 204);
 });

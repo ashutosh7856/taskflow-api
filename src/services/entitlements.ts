@@ -26,6 +26,12 @@ type PlanEntitlements = {
   clientPortals: number | null;
   portalBranding: boolean;
   whiteLabel: boolean;
+  /** Total file storage across every workspace the account owns. */
+  storageMb: number;
+  /** Largest single upload. Cloudflare caps request bodies at 100 MB. */
+  maxFileMb: number;
+  /** AI writes and emails the client update every Friday. */
+  weeklyUpdates: boolean;
 };
 
 export const planCatalog: Record<Plan, PlanEntitlements> = {
@@ -43,6 +49,9 @@ export const planCatalog: Record<Plan, PlanEntitlements> = {
     clientPortals: 1,
     portalBranding: false,
     whiteLabel: false,
+    storageMb: 250,
+    maxFileMb: 10,
+    weeklyUpdates: false,
   },
   pro: {
     priceUsd: 19,
@@ -58,6 +67,9 @@ export const planCatalog: Record<Plan, PlanEntitlements> = {
     clientPortals: null,
     portalBranding: true,
     whiteLabel: false,
+    storageMb: 10 * 1024,
+    maxFileMb: 50,
+    weeklyUpdates: true,
   },
   business: {
     priceUsd: 49,
@@ -73,6 +85,9 @@ export const planCatalog: Record<Plan, PlanEntitlements> = {
     clientPortals: null,
     portalBranding: true,
     whiteLabel: true,
+    storageMb: 50 * 1024,
+    maxFileMb: 95,
+    weeklyUpdates: true,
   },
 };
 

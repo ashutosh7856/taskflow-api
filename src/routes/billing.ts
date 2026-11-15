@@ -1,5 +1,6 @@
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
+import { filesAvailable, storageUsedBytes } from "../services/storage";
 import { z } from "zod";
 
 import { db, defer } from "../db";
@@ -84,6 +85,11 @@ billingRouter.get("/billing", async (c) => {
     paypalSubscriptionId: subscription.paypalSubscriptionId,
     billingInterval: subscription.billingInterval,
     entitlements: planCatalog[plan],
+    storage: {
+      enabled: filesAvailable(),
+      usedBytes: await storageUsedBytes(subscription.userId),
+      limitBytes: planCatalog[plan].storageMb * 1024 * 1024,
+    },
     prices: {
       pro: {
         month: planCatalog.pro.priceUsd,

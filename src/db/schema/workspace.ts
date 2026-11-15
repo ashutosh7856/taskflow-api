@@ -237,6 +237,13 @@ export const boards = pgTable("boards", {
   portalClientEmail: text("portal_client_email"),
   portalWelcome: text("portal_welcome"),
   portalAllowRequests: boolean("portal_allow_requests").default(true).notNull(),
+  /** Opt-in: AI writes and emails the client update every Friday. */
+  portalWeeklyUpdates: boolean("portal_weekly_updates")
+    .default(false)
+    .notNull(),
+  portalLastAutoUpdateAt: timestamp("portal_last_auto_update_at", {
+    withTimezone: true,
+  }),
   createdBy: uuid("created_by").references(() => users.id, {
     onDelete: "set null",
   }),
@@ -393,6 +400,41 @@ export const comments = pgTable("comments", {
     .notNull(),
 });
 
+/**
+ * Files attached to cards (designs, drafts, videos) for client proofing.
+ * Bytes live in R2 under `storageKey`; this row is the index and quota
+ * source. workspaceId is kept so storage can be summed per owner cheaply.
+ */
+export const cardFiles = pgTable(
+  "card_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    cardId: uuid("card_id")
+      .references(() => cards.id, { onDelete: "cascade" })
+      .notNull(),
+    boardId: uuid("board_id")
+      .references(() => boards.id, { onDelete: "cascade" })
+      .notNull(),
+    workspaceId: uuid("workspace_id")
+      .references(() => workspaces.id, { onDelete: "cascade" })
+      .notNull(),
+    uploadedBy: uuid("uploaded_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    name: text("name").notNull(),
+    contentType: text("content_type").notNull(),
+    size: integer("size").notNull(),
+    storageKey: text("storage_key").notNull().unique(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("card_files_card_idx").on(table.cardId, table.createdAt),
+    index("card_files_workspace_idx").on(table.workspaceId),
+  ],
+);
+
 export const clientFeedback = pgTable(
   "client_feedback",
   {
@@ -492,6 +534,11 @@ export const cardsRelations = relations(cards, ({ one, many }) => ({
   labels: many(cardLabels),
   checklists: many(checklists),
   comments: many(comments),
+  files: many(cardFiles),
+}));
+
+export const cardFilesRelations = relations(cardFiles, ({ one }) => ({
+  card: one(cards, { fields: [cardFiles.cardId], references: [cards.id] }),
 }));
 
 export const workspaceMembersRelations = relations(
