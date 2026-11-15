@@ -14,7 +14,11 @@ import {
   users,
 } from "../db/schema";
 import { body, HttpError, type AppEnv } from "../lib/http";
-import { paypalConfigured, paypalRequest } from "../services/paypal";
+import {
+  paypalConfigured,
+  paypalPlanUsable,
+  paypalRequest,
+} from "../services/paypal";
 import { frontendUrl, sendEmail } from "../services/email";
 import {
   claimUnlinkedPayments,
@@ -154,14 +158,18 @@ billingRouter.post("/billing/paypal/setup", async (c) => {
     where: eq(billingPlans.plan, plan),
   });
   const priceUsd = planCatalog[plan].priceUsd;
-  if (existing && existing.priceUsd === priceUsd && !discount)
+  const existingUsable =
+    Boolean(existing) &&
+    existing!.priceUsd === priceUsd &&
+    (await paypalPlanUsable(existing!.paypalPlanId));
+  if (existing && existingUsable && !discount)
     return c.json({
       plan,
       priceUsd: existing.priceUsd,
       paypalPlanId: existing.paypalPlanId,
     });
   let basePlan = existing;
-  if (!basePlan || basePlan.priceUsd !== priceUsd) {
+  if (!basePlan || !existingUsable) {
     const product = await paypalRequest<{ id: string }>(
       "/v1/catalogs/products",
       {
@@ -255,7 +263,7 @@ billingRouter.post("/billing/paypal/setup", async (c) => {
   const discountPlanField =
     plan === "pro" ? "paypalProPlanId" : "paypalBusinessPlanId";
   const cachedPlanId = discount[discountPlanField];
-  if (cachedPlanId) {
+  if (cachedPlanId && (await paypalPlanUsable(cachedPlanId))) {
     return c.json({
       plan,
       priceUsd,
@@ -322,7 +330,12 @@ async function yearlyPlan(plan: "pro" | "business") {
   const existing = await db.query.annualBillingPlans.findFirst({
     where: eq(annualBillingPlans.plan, plan),
   });
-  if (existing && existing.priceUsd === priceUsd && existing.active)
+  if (
+    existing &&
+    existing.priceUsd === priceUsd &&
+    existing.active &&
+    (await paypalPlanUsable(existing.paypalPlanId))
+  )
     return {
       plan,
       interval: "year",
