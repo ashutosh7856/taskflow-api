@@ -3,12 +3,14 @@ import { Hono } from "hono";
 
 import { db } from "../db";
 import {
+  boards,
   subscriptions,
   users,
   workspaceMembers,
   workspaces,
 } from "../db/schema";
 import { workspaceAccess } from "../lib/access";
+import { invalidateEdge } from "../lib/cache";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { nameSchema, memberSchema } from "../validators/common";
 import { frontendUrl, sendEmail } from "../services/email";
@@ -100,7 +102,17 @@ workspacesRouter.delete("/workspaces/:id", async (c) => {
     throw new HttpError(403, "Only the owner can delete a workspace");
   }
 
+  const portalBoards = await db
+    .select({ portalToken: boards.portalToken })
+    .from(boards)
+    .where(eq(boards.workspaceId, workspaceId));
   await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+  // Boards cascade with the workspace; clear their cached public portals.
+  await Promise.all(
+    portalBoards
+      .filter((board) => board.portalToken)
+      .map((board) => invalidateEdge(`portal:${board.portalToken}`)),
+  );
   return c.body(null, 204);
 });
 
@@ -135,10 +147,11 @@ workspacesRouter.post("/workspaces/:id/members", async (c) => {
     ? await sendEmail({
         to: targetUser.email,
         subject: `You were added to ${workspace?.name || "a workspace"}`,
-        title: "You have a new workspace",
-        message: `${actor?.name || "A teammate"} added you to ${workspace?.name || "a workspace"} on Danto.`,
-        actionLabel: "Open Danto",
-        actionUrl: frontendUrl("/"),
+        title: `Welcome to ${workspace?.name || "the workspace"}`,
+        eyebrow: "Workspace access",
+        message: `${actor?.name || "A teammate"} added you to “${workspace?.name || "a workspace"}” on Danto.`,
+        actionLabel: "Open workspace",
+        actionUrl: frontendUrl("/app"),
       })
     : { sent: false };
 

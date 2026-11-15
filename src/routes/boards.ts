@@ -19,6 +19,7 @@ import {
   listBoard,
   workspaceAccess,
 } from "../lib/access";
+import { invalidateEdge } from "../lib/cache";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { recordActivity } from "../services/activity";
 import { frontendUrl, sendEmail } from "../services/email";
@@ -31,11 +32,17 @@ import { memberSchema, nameSchema } from "../validators/common";
 const boardsRouter = new Hono<AppEnv>();
 const boardTemplates = {
   blank: [],
+  client: ["Requests", "In progress", "Ready for review", "Done"],
   software: ["Backlog", "Ready", "In progress", "Review", "Done"],
   marketing: ["Ideas", "Planned", "Creating", "Approval", "Published"],
   operations: ["Requests", "Triage", "In progress", "Blocked", "Resolved"],
 } as const;
 const templateLabels = {
+  client: [
+    { name: "Deliverable", color: "#2563eb" },
+    { name: "Revision", color: "#ea580c" },
+    { name: "Waiting on client", color: "#ca8a04" },
+  ],
   blank: [
     { name: "Important", color: "#dc2626" },
     { name: "Quick win", color: "#16a34a" },
@@ -87,7 +94,7 @@ boardsRouter.post("/workspaces/:workspaceId/boards", async (c) => {
     nameSchema.extend({
       backgroundColor: z.string().min(1).default("blue"),
       template: z
-        .enum(["blank", "software", "marketing", "operations"])
+        .enum(["blank", "client", "software", "marketing", "operations"])
         .default("blank"),
     }),
   );
@@ -201,7 +208,13 @@ boardsRouter.delete("/boards/:id", async (c) => {
     throw new HttpError(403, "Only the owner can delete a board");
   }
 
-  await db.delete(boards).where(eq(boards.id, boardId));
+  const [deleted] = await db
+    .delete(boards)
+    .where(eq(boards.id, boardId))
+    .returning({ portalToken: boards.portalToken });
+  // The public portal is edge-cached; drop it so the link stops working now.
+  if (deleted?.portalToken)
+    await invalidateEdge(`portal:${deleted.portalToken}`);
   return c.body(null, 204);
 });
 
@@ -231,8 +244,9 @@ boardsRouter.post("/boards/:id/members", async (c) => {
     ? await sendEmail({
         to: targetUser.email,
         subject: `You were added to ${board?.name || "a board"}`,
-        title: "You have a new board",
-        message: `${actor?.name || "A teammate"} added you to ${board?.name || "a board"} on Danto.`,
+        title: `You're on ${board?.name || "a new board"}`,
+        eyebrow: "Board access",
+        message: `${actor?.name || "A teammate"} added you to “${board?.name || "a board"}”. You can now see and update its cards.`,
         actionLabel: "Open board",
         actionUrl: frontendUrl(`/boards/${boardId}`),
       })

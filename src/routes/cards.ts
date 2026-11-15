@@ -3,7 +3,14 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { db } from "../db";
-import { cardLabels, cardMembers, cards, labels, users } from "../db/schema";
+import {
+  boards,
+  cardLabels,
+  cardMembers,
+  cards,
+  labels,
+  users,
+} from "../db/schema";
 import { boardAccess, cardBoard, listBoard } from "../lib/access";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { recordActivity } from "../services/activity";
@@ -34,6 +41,7 @@ const updateCardSchema = z.object({
   category: z.string().min(1).max(40).optional(),
   priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
   estimateMinutes: z.number().int().min(0).max(100000).nullable().optional(),
+  clientVisible: z.boolean().optional(),
 });
 
 cardsRouter.post("/lists/:listId/cards", async (c) => {
@@ -159,16 +167,30 @@ cardsRouter.post("/cards/:id/members", async (c) => {
     db.query.cards.findFirst({ where: eq(cards.id, cardId) }),
     db.query.users.findFirst({ where: eq(users.id, c.get("userId")) }),
   ]);
-  const email = targetUser
-    ? await sendEmail({
-        to: targetUser.email,
-        subject: `You were assigned: ${card?.title || "Danto card"}`,
-        title: "A card was assigned to you",
-        message: `${actor?.name || "A teammate"} assigned you to “${card?.title || "a card"}”.`,
-        actionLabel: "Open card",
-        actionUrl: frontendUrl(`/boards/${boardId}?card=${cardId}`),
-      })
-    : { sent: false };
+  const board = await db.query.boards.findFirst({
+    where: eq(boards.id, boardId),
+  });
+  // Assigning yourself is not news; skip the email.
+  const email =
+    targetUser && userId !== c.get("userId")
+      ? await sendEmail({
+          to: targetUser.email,
+          subject: `Assigned to you: ${card?.title || "a card"}`,
+          title: card?.title || "A card was assigned to you",
+          eyebrow: "New assignment",
+          message: `${actor?.name || "A teammate"} assigned this to you.${card?.description ? `\n\n${card.description.slice(0, 280)}${card.description.length > 280 ? "…" : ""}` : ""}`,
+          details: [
+            ["Board", board?.name || "—"],
+            [
+              "Due",
+              card?.dueDate ? card.dueDate.toDateString() : "No due date",
+            ],
+            ["Priority", card?.priority || "medium"],
+          ],
+          actionLabel: "Open card",
+          actionUrl: frontendUrl(`/boards/${boardId}?card=${cardId}`),
+        })
+      : { sent: false };
 
   await recordActivity(c.get("userId"), boardId, "card.member_added", cardId, {
     assignedUserId: userId,

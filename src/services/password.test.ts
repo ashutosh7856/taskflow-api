@@ -12,7 +12,9 @@ describe("password hashing", () => {
     const hash = await hashPassword("correct horse battery staple");
 
     expect(hash).toStartWith("pbkdf2-sha256$");
-    expect(await verifyPassword("correct horse battery staple", hash)).toBe(true);
+    expect(await verifyPassword("correct horse battery staple", hash)).toBe(
+      true,
+    );
     expect(await verifyPassword("wrong password", hash)).toBe(false);
   });
 
@@ -24,9 +26,9 @@ describe("password hashing", () => {
     expect(passwordHashFormat("$argon2id$v=19$m=65536,t=2,p=1$salt$hash")).toBe(
       "argon2",
     );
-    expect(passwordNeedsRehash("$argon2id$v=19$m=65536,t=2,p=1$salt$hash")).toBe(
-      true,
-    );
+    expect(
+      passwordNeedsRehash("$argon2id$v=19$m=65536,t=2,p=1$salt$hash"),
+    ).toBe(true);
     expect(passwordNeedsRehash("pbkdf2-sha256$310000$salt$hash")).toBe(true);
     expect(passwordNeedsRehash("pbkdf2-sha256$100000$salt$hash")).toBe(false);
   });

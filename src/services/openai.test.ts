@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  buildOpenAiPayload,
   estimateAiCostMicrousd,
   extractResponseText,
   limitAiInput,
+  supportsReasoningEffort,
 } from "./openai";
 
 describe("OpenAI Responses parsing", () => {
@@ -33,5 +35,24 @@ describe("OpenAI Responses parsing", () => {
     const limited = limitAiInput("x".repeat(70_000));
     expect(limited.length).toBeLessThan(61_000);
     expect(limited).toContain("Context truncated");
+  });
+
+  test("does not send reasoning options to non-reasoning models", () => {
+    const payload = buildOpenAiPayload("gpt-4o-mini", "Create a plan", {
+      reasoningEffort: "medium",
+    });
+
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload.model).toBe("gpt-4o-mini");
+  });
+
+  test("sends reasoning options to reasoning models", () => {
+    expect(supportsReasoningEffort("gpt-6-luna")).toBe(true);
+    expect(supportsReasoningEffort("o4-mini")).toBe(true);
+    expect(
+      buildOpenAiPayload("gpt-6-luna", "Create a plan", {
+        reasoningEffort: "medium",
+      }),
+    ).toMatchObject({ reasoning: { effort: "medium" } });
   });
 });

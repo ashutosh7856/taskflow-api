@@ -72,8 +72,18 @@ async function createInvite(
     to: input.email,
     subject: `You were invited to ${target?.name || "Danto"}`,
     title: `Join ${target?.name || "Danto"}`,
-    message: `${inviter?.name || "A teammate"} invited you to a ${scope} on Danto.`,
+    eyebrow: "Invitation",
+    message: `${inviter?.name || "A teammate"} invited you to collaborate on the ${scope} “${target?.name || "Danto"}”. Accept to see the boards, cards and client portals you've been given access to.`,
+    details: [
+      ["Invited by", inviter?.name || "A teammate"],
+      [
+        "Access",
+        `${scope === "workspace" ? "Workspace" : "Board"} · ${invite.role}`,
+      ],
+    ],
     actionLabel: "Accept invitation",
+    footnote:
+      "This invitation expires in 7 days. If you weren't expecting it, you can ignore this email.",
     actionUrl: frontendUrl(`/invites/${invite.token}`),
   });
 

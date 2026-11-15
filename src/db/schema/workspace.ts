@@ -24,6 +24,10 @@ export const billingStatusEnum = pgEnum("billing_status", [
   "past_due",
   "cancelled",
 ]);
+export const billingIntervalEnum = pgEnum("billing_interval", [
+  "month",
+  "year",
+]);
 export const priorityEnum = pgEnum("priority", [
   "low",
   "medium",
@@ -31,9 +35,25 @@ export const priorityEnum = pgEnum("priority", [
   "urgent",
 ]);
 
+export const approvalStatusEnum = pgEnum("approval_status", [
+  "none",
+  "pending",
+  "approved",
+  "changes_requested",
+]);
+export const clientFeedbackKindEnum = pgEnum("client_feedback_kind", [
+  "comment",
+  "approved",
+  "changes_requested",
+  "request",
+]);
+
 export const workspaces = pgTable("workspaces", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
+  brandName: text("brand_name"),
+  brandColor: text("brand_color"),
+  brandLogoUrl: text("brand_logo_url"),
   ownerId: uuid("owner_id")
     .references(() => users.id, { onDelete: "restrict" })
     .notNull(),
@@ -51,6 +71,9 @@ export const subscriptions = pgTable("subscriptions", {
     .default("inactive")
     .notNull(),
   paypalSubscriptionId: text("paypal_subscription_id").unique(),
+  billingInterval: billingIntervalEnum("billing_interval")
+    .default("month")
+    .notNull(),
   discountCodeId: uuid("discount_code_id"),
   currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
   aiRequestsThisMonth: integer("ai_requests_this_month").default(0).notNull(),
@@ -168,6 +191,18 @@ export const billingPlans = pgTable("billing_plans", {
     .notNull(),
 });
 
+/** PayPal yearly plans (monthly ones live in billing_plans). */
+export const annualBillingPlans = pgTable("annual_billing_plans", {
+  plan: planEnum("plan").primaryKey(),
+  paypalProductId: text("paypal_product_id").notNull(),
+  paypalPlanId: text("paypal_plan_id").notNull().unique(),
+  priceUsd: integer("price_usd").notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
 export const workspaceMembers = pgTable(
   "workspace_members",
   {
@@ -196,6 +231,12 @@ export const boards = pgTable("boards", {
   name: text("name").notNull(),
   backgroundColor: text("background_color").default("blue").notNull(),
   template: text("template").default("blank").notNull(),
+  portalToken: text("portal_token").unique(),
+  portalEnabled: boolean("portal_enabled").default(false).notNull(),
+  portalClientName: text("portal_client_name"),
+  portalClientEmail: text("portal_client_email"),
+  portalWelcome: text("portal_welcome"),
+  portalAllowRequests: boolean("portal_allow_requests").default(true).notNull(),
   createdBy: uuid("created_by").references(() => users.id, {
     onDelete: "set null",
   }),
@@ -257,6 +298,16 @@ export const cards = pgTable(
     dueDate: timestamp("due_date", { withTimezone: true }),
     priority: priorityEnum("priority").default("medium").notNull(),
     estimateMinutes: integer("estimate_minutes"),
+    clientVisible: boolean("client_visible").default(true).notNull(),
+    approvalStatus: approvalStatusEnum("approval_status")
+      .default("none")
+      .notNull(),
+    approvalRequestedAt: timestamp("approval_requested_at", {
+      withTimezone: true,
+    }),
+    approvalRespondedAt: timestamp("approval_responded_at", {
+      withTimezone: true,
+    }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -341,6 +392,32 @@ export const comments = pgTable("comments", {
     .defaultNow()
     .notNull(),
 });
+
+export const clientFeedback = pgTable(
+  "client_feedback",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    boardId: uuid("board_id")
+      .references(() => boards.id, { onDelete: "cascade" })
+      .notNull(),
+    cardId: uuid("card_id").references(() => cards.id, {
+      onDelete: "cascade",
+    }),
+    kind: clientFeedbackKindEnum("kind").notNull(),
+    authorName: text("author_name").notNull(),
+    message: text("message").notNull(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("client_feedback_board_created_idx").on(
+      table.boardId,
+      table.createdAt,
+    ),
+  ],
+);
 
 export const activityLogs = pgTable("activity_logs", {
   id: uuid("id").primaryKey().defaultRandom(),

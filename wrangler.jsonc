@@ -3,10 +3,22 @@
   "name": "taskflow-api",
   "main": "./src/index.ts",
   "compatibility_date": "2026-11-09",
+  // node:async_hooks (request-scoped DB client) and process.env need this.
+  "compatibility_flags": ["nodejs_compat"],
+  // Run the Worker next to the database instead of next to each visitor:
+  // every sequential query then costs ~1ms instead of a cross-world trip.
+  "placement": { "mode": "smart" },
+  // Warm, pooled Postgres connections. Create it once with:
+  //   npx wrangler hyperdrive create danto-db --caching-disabled --connection-string="<DATABASE_URL_UNPOOLED>"
+  // Query caching stays OFF: boards are edited collaboratively, and a cached
+  // SELECT right after a write would show stale cards. Safe caching is done in
+  // code instead (src/lib/cache.ts).
+  // then paste the returned id below and uncomment.
+  // "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<your-hyperdrive-id>" }],
   "upload_source_maps": true,
   "vars": {
-    "FRONTEND_URL": "https://taskflow-ui-b5u.pages.dev",
-    "CORS_ORIGINS": "https://taskflow-ui-b5u.pages.dev",
+    "FRONTEND_URL": "https://danto.app",
+    "CORS_ORIGINS": "https://danto.app,https://www.danto.app,https://taskflow-ui-b5u.pages.dev",
     "OPENAI_MODEL": "gpt-6-luna",
     "OPENAI_FALLBACK_MODEL": "gpt-6.1-sol",
     "PAYPAL_ENV": "sandbox"

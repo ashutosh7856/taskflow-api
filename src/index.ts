@@ -8,6 +8,7 @@ import apiRoutes from "./routes/api";
 import { HttpError, type AppEnv } from "./lib/http";
 import { openApi } from "./openapi";
 import { paypalWebhook } from "./routes/billing";
+import { publicPortal } from "./routes/portal";
 import { withDatabase } from "./db";
 
 const app = new Hono<AppEnv>();
@@ -38,7 +39,21 @@ app.use(
     maxAge: 86400,
   }),
 );
-app.use("*", async (_c, next) => withDatabase(next));
+app.use("*", async (c, next) => {
+  const env = c.env as
+    { HYPERDRIVE?: { connectionString: string } } | undefined;
+  let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
+  try {
+    const ctx = c.executionCtx;
+    waitUntil = ctx.waitUntil.bind(ctx);
+  } catch {
+    // Not running on Workers (Bun dev server): use the shared pool.
+  }
+  return withDatabase(next, {
+    connectionString: env?.HYPERDRIVE?.connectionString,
+    waitUntil,
+  });
+});
 app.get("/", (c) =>
   c.json({ name: "Trello API", docs: "/docs", health: "ok" }),
 );
@@ -46,6 +61,7 @@ app.get("/openapi.json", (c) => c.json(openApi));
 app.get("/docs", swaggerUI({ url: "/openapi.json" }));
 app.route("/auth", authRoutes);
 app.route("/webhooks", paypalWebhook);
+app.route("/portal", publicPortal);
 app.route("/", apiRoutes);
 app.notFound((c) => c.json({ error: "Route not found" }, 404));
 app.onError((error, c) => {
@@ -54,7 +70,9 @@ app.onError((error, c) => {
       { error: error.message, details: error.details },
       error.status as any,
     );
-  const databaseError = error as Error & {
+  // Drizzle wraps the real Postgres error in `cause`; log that, not the wrapper.
+  const databaseError = ((error as Error & { cause?: unknown }).cause ||
+    error) as Error & {
     code?: string;
     detail?: string;
     hint?: string;
@@ -73,6 +91,7 @@ app.onError((error, c) => {
     table: databaseError.table_name,
     column: databaseError.column_name,
     constraint: databaseError.constraint_name,
+    query: (error as Error).message.split("\n")[0].slice(0, 300),
     stack: databaseError.stack,
   });
   return c.json({ error: "Internal server error" }, 500);

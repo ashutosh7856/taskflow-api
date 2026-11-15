@@ -78,6 +78,34 @@
       "when": 1794221497952,
       "tag": "0010_colorful_impossible_man",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794747975323,
+      "tag": "0011_client-portal",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794749497640,
+      "tag": "0012_auth-and-admin",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794760312269,
+      "tag": "0013_yearly-billing",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1794765683351,
+      "tag": "0014_admin-otp",
+      "breakpoints": true
     }
   ]
 }

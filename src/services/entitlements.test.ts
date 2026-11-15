@@ -20,6 +20,18 @@ describe("account plan entitlements", () => {
     expect(planCatalog.business.aiRequests).toBe(1500);
   });
 
+  test("client portal entitlements gate the paid upgrade path", () => {
+    expect(planCatalog.free.clientPortals).toBe(1);
+    expect(planCatalog.free.portalBranding).toBe(false);
+    expect(planCatalog.free.whiteLabel).toBe(false);
+    expect(planCatalog.pro.clientPortals).toBeNull();
+    expect(planCatalog.pro.portalBranding).toBe(true);
+    expect(planCatalog.pro.whiteLabel).toBe(false);
+    expect(planCatalog.business.whiteLabel).toBe(true);
+    expect(planCatalog.pro.priceUsd).toBe(19);
+    expect(planCatalog.business.priceUsd).toBe(49);
+  });
+
   test.each([
     [0, "free", true],
     [1, "free", false],

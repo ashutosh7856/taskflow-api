@@ -19,6 +19,11 @@ export const auth = createMiddleware<AppEnv>(async (c, next) => {
     if (typeof payload.sub !== "string" || payload.type !== "access")
       throw new Error();
     c.set("userId", payload.sub);
+    c.set(
+      "adminSession",
+      typeof payload.admUntil === "number" &&
+        payload.admUntil * 1000 > Date.now(),
+    );
     await next();
   } catch {
     return c.json({ error: "Invalid or expired token" }, 401);

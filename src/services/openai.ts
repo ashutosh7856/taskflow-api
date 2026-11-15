@@ -44,6 +44,43 @@ export function limitAiInput(input: string, maxCharacters = 60_000) {
   return `${input.slice(0, maxCharacters)}\n[Context truncated to protect the workspace AI budget.]`;
 }
 
+type OpenAiResponseOptions = {
+  schema?: Record<string, unknown>;
+  schemaName?: string;
+  reasoningEffort?: "none" | "low" | "medium";
+  maxOutputTokens?: number;
+};
+
+export function supportsReasoningEffort(model: string) {
+  return /^(?:gpt-[56](?:[.-]|$)|o[134](?:-|$))/i.test(model);
+}
+
+export function buildOpenAiPayload(
+  model: string,
+  input: string,
+  options?: OpenAiResponseOptions,
+) {
+  const payload: Record<string, unknown> = {
+    model,
+    input: limitAiInput(input),
+    max_output_tokens: options?.maxOutputTokens || 1800,
+  };
+  if (supportsReasoningEffort(model)) {
+    payload.reasoning = { effort: options?.reasoningEffort || "low" };
+  }
+  if (options?.schema) {
+    payload.text = {
+      format: {
+        type: "json_schema",
+        name: options.schemaName || "taskflow_response",
+        strict: true,
+        schema: options.schema,
+      },
+    };
+  }
+  return payload;
+}
+
 export async function workspaceAiAllowance(boardId: string) {
   const workspaceId = await boardWorkspace(boardId);
   return workspaceAiAllowanceForWorkspace(workspaceId);
@@ -87,32 +124,12 @@ export async function workspaceAiAllowanceForWorkspace(workspaceId: string) {
 
 export async function openAiResponse(
   input: string,
-  options?: {
-    schema?: Record<string, unknown>;
-    schemaName?: string;
-    reasoningEffort?: "none" | "low" | "medium";
-    maxOutputTokens?: number;
-  },
+  options?: OpenAiResponseOptions,
 ) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new HttpError(503, "AI is not configured yet");
   const primaryModel = process.env.OPENAI_MODEL || "gpt-6-luna";
   const fallbackModel = process.env.OPENAI_FALLBACK_MODEL || "gpt-6.1-sol";
-  const payload: Record<string, unknown> = {
-    input: limitAiInput(input),
-    max_output_tokens: options?.maxOutputTokens || 1800,
-    reasoning: { effort: options?.reasoningEffort || "low" },
-  };
-  if (options?.schema) {
-    payload.text = {
-      format: {
-        type: "json_schema",
-        name: options.schemaName || "taskflow_response",
-        strict: true,
-        schema: options.schema,
-      },
-    };
-  }
   const request = async (model: string) => {
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -120,7 +137,7 @@ export async function openAiResponse(
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ ...payload, model }),
+      body: JSON.stringify(buildOpenAiPayload(model, input, options)),
       signal: AbortSignal.timeout(45_000),
     });
     const data = await response.json().catch(() => null);
@@ -131,7 +148,10 @@ export async function openAiResponse(
     result = await request(primaryModel);
     if (
       !result.response.ok &&
-      result.response.status >= 429 &&
+      (result.response.status >= 429 ||
+        result.response.status === 403 ||
+        result.response.status === 404 ||
+        result.data?.error?.param === "model") &&
       fallbackModel !== primaryModel
     ) {
       result = await request(fallbackModel);
@@ -145,7 +165,12 @@ export async function openAiResponse(
   }
   const { response, data, model } = result;
   if (!response.ok) {
-    console.error("OpenAI request failed", response.status, data?.error?.type);
+    console.error("OpenAI request failed", {
+      status: response.status,
+      type: data?.error?.type,
+      code: data?.error?.code,
+      param: data?.error?.param,
+    });
     throw new HttpError(502, "AI generation failed. Please try again.");
   }
   const inputTokens = Number(data?.usage?.input_tokens || 0);
@@ -167,7 +192,7 @@ export async function openAiResponse(
 export async function reserveAiRequest(
   userId: string,
   plan: keyof typeof planCatalog,
-  feature: "board_plan" | "board_summary" | "workspace_pulse",
+  feature: "board_plan" | "board_summary" | "workspace_pulse" | "client_update",
   inputCharacters = 0,
 ) {
   const limits = planCatalog[plan];

@@ -12,6 +12,7 @@ import workspacesRouter from "./workspaces";
 import aiRouter from "./ai";
 import billingRouter from "./billing";
 import adminRouter from "./admin";
+import portalRouter from "./portal";
 
 const api = new Hono<AppEnv>();
 
@@ -25,6 +26,8 @@ api.route("/", labelsAndActivityRouter);
 api.route("/", invitesRouter);
 api.route("/", aiRouter);
 api.route("/", billingRouter);
+api.route("/", portalRouter);
+// adminRouter guards "*" with an admin check, so it must stay mounted last.
 api.route("/", adminRouter);
 
 export default api;

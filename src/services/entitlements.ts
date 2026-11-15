@@ -1,4 +1,4 @@
-import { and, count, countDistinct, eq } from "drizzle-orm";
+import { and, asc, count, countDistinct, eq, ne } from "drizzle-orm";
 
 import { db } from "../db";
 import {
@@ -7,11 +7,14 @@ import {
   workspaceMembers,
   workspaces,
 } from "../db/schema";
+import { cached, invalidate } from "../lib/cache";
 import { HttpError } from "../lib/http";
 
 type Plan = "free" | "pro" | "business";
 type PlanEntitlements = {
   priceUsd: number;
+  /** Yearly price: 2 months free. */
+  yearlyPriceUsd: number;
   seats: number;
   aiRequests: number | null;
   workspaces: number | null;
@@ -20,11 +23,15 @@ type PlanEntitlements = {
   workspacePulse: boolean;
   aiHourlyRequests: number;
   aiDailyRequests: number;
+  clientPortals: number | null;
+  portalBranding: boolean;
+  whiteLabel: boolean;
 };
 
 export const planCatalog: Record<Plan, PlanEntitlements> = {
   free: {
     priceUsd: 0,
+    yearlyPriceUsd: 0,
     seats: 1,
     aiRequests: 10,
     workspaces: 1,
@@ -33,9 +40,13 @@ export const planCatalog: Record<Plan, PlanEntitlements> = {
     workspacePulse: false,
     aiHourlyRequests: 10,
     aiDailyRequests: 20,
+    clientPortals: 1,
+    portalBranding: false,
+    whiteLabel: false,
   },
   pro: {
-    priceUsd: 12,
+    priceUsd: 19,
+    yearlyPriceUsd: 190,
     seats: 3,
     aiRequests: 300,
     workspaces: 5,
@@ -44,9 +55,13 @@ export const planCatalog: Record<Plan, PlanEntitlements> = {
     workspacePulse: false,
     aiHourlyRequests: 30,
     aiDailyRequests: 75,
+    clientPortals: null,
+    portalBranding: true,
+    whiteLabel: false,
   },
   business: {
-    priceUsd: 39,
+    priceUsd: 49,
+    yearlyPriceUsd: 490,
     seats: 10,
     aiRequests: 1500,
     workspaces: null,
@@ -55,6 +70,9 @@ export const planCatalog: Record<Plan, PlanEntitlements> = {
     workspacePulse: true,
     aiHourlyRequests: 60,
     aiDailyRequests: 250,
+    clientPortals: null,
+    portalBranding: true,
+    whiteLabel: true,
   },
 };
 
@@ -82,11 +100,21 @@ export function hasSeatCapacity(
   return currentSeats < planCatalog[plan].seats;
 }
 
-async function ownerPlan(ownerId: string): Promise<Plan> {
-  const subscription = await db.query.subscriptions.findFirst({
-    where: eq(subscriptions.userId, ownerId),
-  });
+/**
+ * The plan behind a workspace owner. Checked on almost every write, so it's
+ * cached for 60s per isolate; billing changes call invalidatePlan().
+ */
+export async function ownerPlan(ownerId: string): Promise<Plan> {
+  const subscription = await cached(`sub:${ownerId}`, 60, () =>
+    db.query.subscriptions.findFirst({
+      where: eq(subscriptions.userId, ownerId),
+    }),
+  );
   return effectivePlan(subscription);
+}
+
+export function invalidatePlan(userId: string) {
+  invalidate(`sub:${userId}`);
 }
 
 export async function assertWorkspaceCreationAvailable(ownerId: string) {
@@ -187,4 +215,55 @@ export async function assertWorkspacePulseAvailable(workspaceId: string) {
     });
   }
   return { workspace, plan };
+}
+
+/**
+ * On plans with a portal limit (Free), only the oldest N enabled portals stay
+ * live. Extra ones (e.g. after a trial or downgrade) are paused, not deleted,
+ * and come back as soon as the owner upgrades.
+ */
+export async function portalIsLive(ownerId: string, boardId: string) {
+  const plan = await ownerPlan(ownerId);
+  const limit = planCatalog[plan].clientPortals;
+  if (limit === null) return true;
+  const live = await db
+    .select({ id: boards.id })
+    .from(boards)
+    .innerJoin(workspaces, eq(boards.workspaceId, workspaces.id))
+    .where(and(eq(workspaces.ownerId, ownerId), eq(boards.portalEnabled, true)))
+    .orderBy(asc(boards.createdAt))
+    .limit(limit);
+  return live.some((row) => row.id === boardId);
+}
+
+export async function assertPortalAvailable(
+  workspaceId: string,
+  boardId: string,
+) {
+  const workspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, workspaceId),
+  });
+  if (!workspace) throw new HttpError(404, "Workspace not found");
+  const plan = await ownerPlan(workspace.ownerId);
+  const limit = planCatalog[plan].clientPortals;
+  if (limit === null) return plan;
+  const [{ total }] = await db
+    .select({ total: count() })
+    .from(boards)
+    .innerJoin(workspaces, eq(boards.workspaceId, workspaces.id))
+    .where(
+      and(
+        eq(workspaces.ownerId, workspace.ownerId),
+        eq(boards.portalEnabled, true),
+        ne(boards.id, boardId),
+      ),
+    );
+  if (Number(total) >= limit) {
+    throw new HttpError(
+      402,
+      `The Free plan includes ${limit} live client portal. Upgrade to Pro for unlimited portals.`,
+      { upgradeRequired: true, requiredPlan: "pro", clientPortals: limit },
+    );
+  }
+  return plan;
 }

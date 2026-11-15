@@ -1,7 +1,11 @@
 import type { Context } from "hono";
 import type { ZodType } from "zod";
 
-export type Variables = { userId: string };
+export type Variables = {
+  userId: string;
+  /** True only for sessions opened with an emailed admin code. */
+  adminSession?: boolean;
+};
 export type AppEnv = { Variables: Variables };
 
 export async function body<T>(c: Context, schema: ZodType<T>): Promise<T> {

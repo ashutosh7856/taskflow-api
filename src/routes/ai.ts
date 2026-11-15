@@ -80,6 +80,7 @@ const jsonSchema = {
 };
 const workflowCategories = {
   blank: ["task", "milestone", "idea"],
+  client: ["deliverable", "revision", "request", "task"],
   software: ["feature", "bug", "chore", "spike"],
   marketing: ["campaign", "content", "social", "email", "experiment"],
   operations: ["request", "incident", "process", "maintenance"],
