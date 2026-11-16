@@ -279,6 +279,8 @@ export const lists = sqliteTable(
       .references(() => boards.id, { onDelete: "cascade" })
       .notNull(),
     name: text("name").notNull(),
+    /** Template role: "intake" | "active" | "review" | "done" (see lib/templates). */
+    role: text("role", { enum: ["intake", "active", "review", "done"] }),
     position: integer("position").default(0).notNull(),
     createdAt: timestamp("created_at")
       .$defaultFn(() => new Date())
@@ -309,6 +311,10 @@ export const cards = sqliteTable(
     dueDate: timestamp("due_date"),
     priority: priorityEnum("priority").default("medium").notNull(),
     estimateMinutes: integer("estimate_minutes"),
+    /** Template-specific fields (platforms, caption, proof link…). */
+    fields: text("fields", { mode: "json" }).$type<
+      Record<string, string | number | string[]>
+    >(),
     clientVisible: bool("client_visible").default(true).notNull(),
     approvalStatus: approvalStatusEnum("approval_status")
       .default("none")

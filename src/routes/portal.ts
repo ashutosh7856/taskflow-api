@@ -14,6 +14,7 @@ import {
 import { boardAccess, cardBoard, workspaceAccess } from "../lib/access";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { cachedEdgeJson, invalidateEdge } from "../lib/cache";
+import { clientFields, getTemplate } from "../lib/templates";
 import { recordActivity } from "../services/activity";
 import { portalFiles } from "./files";
 import {
@@ -88,6 +89,43 @@ async function notifyOwner(
   });
 }
 
+/**
+ * When a client answers on a card in the review stage, move it along:
+ * approved goes to the next list (e.g. "Scheduled"), changes go back to the
+ * last working list before review (e.g. "Drafting").
+ */
+async function nextStage(
+  boardId: string,
+  listId: string,
+  kind: "approved" | "changes_requested",
+) {
+  const boardLists = await db.query.lists.findMany({
+    where: eq(lists.boardId, boardId),
+    orderBy: asc(lists.position),
+    columns: { id: true, role: true },
+  });
+  const index = boardLists.findIndex((list) => list.id === listId);
+  if (index < 0 || boardLists[index].role !== "review") return {};
+  const target =
+    kind === "approved"
+      ? boardLists[index + 1]
+      : boardLists
+          .slice(0, index)
+          .reverse()
+          .find((list) => list.role === "active");
+  if (!target) return {};
+  const [{ highest }] = await db
+    .select({ highest: max(cards.position) })
+    .from(cards)
+    .where(eq(cards.listId, target.id));
+  const done = target.role === "done";
+  return {
+    listId: target.id,
+    position: Number(highest ?? -1) + 1,
+    ...(done ? { isCompleted: true, completedAt: new Date() } : {}),
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /* Public, unauthenticated client portal                               */
 /* ------------------------------------------------------------------ */
@@ -110,6 +148,7 @@ publicPortal.get("/:token", async (c) => {
         );
       const plan = await ownerPlan(board.workspace.ownerId);
       const entitlements = planCatalog[plan];
+      const workflow = getTemplate(board.template);
       const boardLists = await db.query.lists.findMany({
         where: eq(lists.boardId, board.id),
         orderBy: asc(lists.position),
@@ -142,6 +181,15 @@ publicPortal.get("/:token", async (c) => {
           welcome: board.portalWelcome,
           allowRequests: board.portalAllowRequests,
           updatedAt: new Date().toISOString(),
+          workflow: {
+            cardNoun: workflow.cardNoun,
+            // The board's own finish list name wins ("Published", "Live"…).
+            completed:
+              boardLists.find((list) => list.role === "done")?.name ||
+              workflow.wording.completed,
+            due: workflow.wording.due,
+            approve: workflow.wording.approve,
+          },
         },
         brand: {
           name:
@@ -168,6 +216,7 @@ publicPortal.get("/:token", async (c) => {
         lists: boardLists.map((list) => ({
           id: list.id,
           name: list.name,
+          role: list.role,
           cards: list.cards.map((card) => {
             const items = card.checklists.flatMap(
               (checklist) => checklist.items,
@@ -182,6 +231,7 @@ publicPortal.get("/:token", async (c) => {
               completedAt: card.completedAt,
               approvalStatus: card.approvalStatus,
               approvalRequestedAt: card.approvalRequestedAt,
+              fields: clientFields(board.template, card.fields),
               checklist: {
                 done: items.filter((i) => i.isDone).length,
                 total: items.length,
@@ -232,7 +282,7 @@ publicPortal.post("/:token/cards/:cardId/respond", async (c) => {
   if (input.kind !== "approved" && !input.message)
     throw new HttpError(400, "Please add a short message");
   const [card] = await db
-    .select({ id: cards.id, title: cards.title })
+    .select({ id: cards.id, title: cards.title, listId: cards.listId })
     .from(cards)
     .innerJoin(lists, eq(cards.listId, lists.id))
     .where(
@@ -261,6 +311,7 @@ publicPortal.post("/:token/cards/:cardId/respond", async (c) => {
       .set({
         approvalStatus: input.kind,
         approvalRespondedAt: new Date(),
+        ...(await nextStage(board.id, card.listId, input.kind)),
         updatedAt: new Date(),
       })
       .where(eq(cards.id, cardId));

@@ -13,6 +13,7 @@ import { publicFiles } from "./routes/files";
 import { type FileBucket, useBucket } from "./services/storage";
 import { runWeeklyUpdates } from "./services/client-updates";
 import { withDatabase, type D1Binding } from "./db";
+import { templates } from "./lib/templates";
 
 const app = new Hono<AppEnv>();
 const allowedOrigins = new Set(
@@ -46,9 +47,7 @@ app.use(
   }),
 );
 app.use("*", async (c, next) => {
-  const env = c.env as
-    | { DB?: D1Binding; FILES?: FileBucket }
-    | undefined;
+  const env = c.env as { DB?: D1Binding; FILES?: FileBucket } | undefined;
   useBucket(env?.FILES, Boolean(env?.DB));
   let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
   try {
@@ -65,6 +64,11 @@ app.use("*", async (c, next) => {
 app.get("/", (c) =>
   c.json({ name: "Trello API", docs: "/docs", health: "ok" }),
 );
+// Board template catalog (stages, fields, wording). Public and cacheable.
+app.get("/templates", (c) => {
+  c.header("Cache-Control", "public, max-age=300");
+  return c.json(templates);
+});
 app.get("/openapi.json", (c) => c.json(openApi));
 app.get("/docs", swaggerUI({ url: "/openapi.json" }));
 app.route("/auth", authRoutes);

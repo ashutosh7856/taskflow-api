@@ -20,6 +20,7 @@ import {
   workspaceAccess,
 } from "../lib/access";
 import { invalidateEdge } from "../lib/cache";
+import { getTemplate, templateIds } from "../lib/templates";
 import { purgeFiles } from "../services/storage";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { recordActivity } from "../services/activity";
@@ -31,43 +32,6 @@ import {
 import { memberSchema, nameSchema } from "../validators/common";
 
 const boardsRouter = new Hono<AppEnv>();
-const boardTemplates = {
-  blank: [],
-  client: ["Requests", "In progress", "Ready for review", "Done"],
-  software: ["Backlog", "Ready", "In progress", "Review", "Done"],
-  marketing: ["Ideas", "Planned", "Creating", "Approval", "Published"],
-  operations: ["Requests", "Triage", "In progress", "Blocked", "Resolved"],
-} as const;
-const templateLabels = {
-  client: [
-    { name: "Deliverable", color: "#2563eb" },
-    { name: "Revision", color: "#ea580c" },
-    { name: "Waiting on client", color: "#ca8a04" },
-  ],
-  blank: [
-    { name: "Important", color: "#dc2626" },
-    { name: "Quick win", color: "#16a34a" },
-  ],
-  software: [
-    { name: "Bug", color: "#dc2626" },
-    { name: "Feature", color: "#2563eb" },
-    { name: "Tech debt", color: "#7c3aed" },
-    { name: "Blocked", color: "#111827" },
-  ],
-  marketing: [
-    { name: "Social", color: "#db2777" },
-    { name: "Email", color: "#7c3aed" },
-    { name: "Content", color: "#0891b2" },
-    { name: "Paid", color: "#ea580c" },
-  ],
-  operations: [
-    { name: "Incident", color: "#dc2626" },
-    { name: "Customer", color: "#2563eb" },
-    { name: "Internal", color: "#16a34a" },
-    { name: "Blocked", color: "#111827" },
-  ],
-} as const;
-
 boardsRouter.get("/workspaces/:workspaceId/boards", async (c) => {
   const workspaceId = c.req.param("workspaceId");
   const userId = c.get("userId");
@@ -94,9 +58,7 @@ boardsRouter.post("/workspaces/:workspaceId/boards", async (c) => {
     c,
     nameSchema.extend({
       backgroundColor: z.string().min(1).default("blue"),
-      template: z
-        .enum(["blank", "client", "software", "marketing", "operations"])
-        .default("blank"),
+      template: z.enum(templateIds).default("blank"),
     }),
   );
   const { template, ...boardInput } = input;
@@ -116,10 +78,10 @@ boardsRouter.post("/workspaces/:workspaceId/boards", async (c) => {
       })
       .returning(),
     db.insert(boardMembers).values({ boardId, userId, role: "owner" }),
-    ...boardTemplates[template].map((name, position) =>
-      db.insert(lists).values({ boardId, name, position }),
+    ...getTemplate(template).lists.map((list, position) =>
+      db.insert(lists).values({ boardId, ...list, position }),
     ),
-    ...templateLabels[template].map((label) =>
+    ...getTemplate(template).labels.map((label) =>
       db.insert(labels).values({ ...label, boardId }),
     ),
   ]);

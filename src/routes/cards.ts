@@ -1,4 +1,4 @@
-import { and, eq, max } from "drizzle-orm";
+import { and, asc, eq, max } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 
@@ -8,9 +8,13 @@ import {
   cardLabels,
   cardMembers,
   cards,
+  checklistItems,
+  checklists,
   labels,
+  lists,
   users,
 } from "../db/schema";
+import { getTemplate, mergeFields } from "../lib/templates";
 import { boardAccess, cardBoard, listBoard } from "../lib/access";
 import { purgeFiles } from "../services/storage";
 import { body, HttpError, type AppEnv } from "../lib/http";
@@ -29,6 +33,7 @@ const createCardSchema = z.object({
   category: z.string().min(1).max(40).default("task"),
   labelIds: z.array(z.string().uuid()).max(12).optional(),
   isCompleted: z.boolean().optional(),
+  fields: z.record(z.string(), z.unknown()).optional(),
 });
 
 const updateCardSchema = z.object({
@@ -43,14 +48,45 @@ const updateCardSchema = z.object({
   priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
   estimateMinutes: z.number().int().min(0).max(100000).nullable().optional(),
   clientVisible: z.boolean().optional(),
+  /** Partial: only the keys sent change; null clears a field. */
+  fields: z.record(z.string(), z.unknown()).optional(),
 });
+
+async function boardContext(boardId: string) {
+  const [board, boardLists] = await Promise.all([
+    db.query.boards.findFirst({
+      where: eq(boards.id, boardId),
+      columns: { template: true },
+    }),
+    db.query.lists.findMany({
+      where: eq(lists.boardId, boardId),
+      orderBy: asc(lists.position),
+      columns: { id: true, role: true },
+    }),
+  ]);
+  return { template: getTemplate(board?.template), lists: boardLists };
+}
+
+async function bottomPosition(listId: string) {
+  const [{ highest }] = await db
+    .select({ highest: max(cards.position) })
+    .from(cards)
+    .where(eq(cards.listId, listId));
+  return Number(highest ?? -1) + 1;
+}
 
 cardsRouter.post("/lists/:listId/cards", async (c) => {
   const listId = c.req.param("listId");
   const userId = c.get("userId");
   const boardId = await listBoard(userId, listId);
   const input = await body(c, createCardSchema);
-  const { labelIds = [], ...cardInput } = input;
+  const { labelIds = [], fields, ...cardInput } = input;
+  const context = await boardContext(boardId);
+  const inDoneList =
+    context.lists.find((list) => list.id === listId)?.role === "done";
+  const starter = context.template.categories.find(
+    (category) => category.value === cardInput.category,
+  )?.checklist;
 
   const [{ highestPosition }] = await db
     .select({ highestPosition: max(cards.position) })
@@ -70,21 +106,41 @@ cardsRouter.post("/lists/:listId/cards", async (c) => {
     }
   }
   const cardId = crypto.randomUUID();
+  const checklistId = crypto.randomUUID();
+  // A card created in the done list (e.g. "Published") starts complete.
+  const isCompleted = cardInput.isCompleted ?? (inDoneList || undefined);
   const [[card]] = await db.batch([
     db
       .insert(cards)
       .values({
         ...cardInput,
+        isCompleted,
         id: cardId,
         listId,
         createdBy: userId,
-        completedAt: cardInput.isCompleted ? new Date() : null,
+        completedAt: isCompleted ? new Date() : null,
         position: cardInput.position ?? Number(highestPosition ?? -1) + 1,
+        fields: fields
+          ? mergeFields(context.template.id, null, fields)
+          : undefined,
       })
       .returning(),
     ...[...new Set(labelIds)].map((labelId) =>
       db.insert(cardLabels).values({ cardId, labelId }),
     ),
+    // Starter checklist for this kind of card (e.g. a social post).
+    ...(starter
+      ? [
+          db.insert(checklists).values({
+            id: checklistId,
+            cardId,
+            title: "Checklist",
+          }),
+          ...starter.map((title, position) =>
+            db.insert(checklistItems).values({ checklistId, title, position }),
+          ),
+        ]
+      : []),
   ]);
 
   await recordActivity(userId, boardId, "card.created", card.id);
@@ -125,13 +181,61 @@ cardsRouter.patch("/cards/:id", async (c) => {
     }
   }
 
+  const current = await db.query.cards.findFirst({
+    where: eq(cards.id, cardId),
+  });
+  if (!current) throw new HttpError(404, "Card not found");
+  const { fields, ...changes } = input;
+  const needsBoard =
+    fields !== undefined ||
+    changes.isCompleted !== undefined ||
+    (changes.listId !== undefined && changes.listId !== current.listId);
+  const context = needsBoard ? await boardContext(currentBoardId) : null;
+
+  // Keep "complete" and the done list (Published, Delivered…) in step, so
+  // the list a card sits in and its status never disagree.
+  if (context) {
+    const roleOf = (id: string) =>
+      context.lists.find((list) => list.id === id)?.role;
+    const doneList = context.lists.find((list) => list.role === "done");
+    const moving =
+      changes.listId !== undefined && changes.listId !== current.listId;
+    if (moving && changes.isCompleted === undefined) {
+      if (roleOf(changes.listId!) === "done") changes.isCompleted = true;
+      else if (roleOf(current.listId) === "done") changes.isCompleted = false;
+    } else if (!moving && doneList && changes.isCompleted !== undefined) {
+      if (changes.isCompleted && current.listId !== doneList.id) {
+        changes.listId = doneList.id;
+        changes.position = await bottomPosition(doneList.id);
+      } else if (!changes.isCompleted && current.listId === doneList.id) {
+        const doneIndex = context.lists.indexOf(doneList);
+        const back = context.lists
+          .slice(0, doneIndex)
+          .reverse()
+          .find((list) => list.role !== "review");
+        if (back) {
+          changes.listId = back.id;
+          changes.position = await bottomPosition(back.id);
+        }
+      }
+    }
+  }
+  const completionChanged =
+    changes.isCompleted !== undefined &&
+    changes.isCompleted !== current.isCompleted;
+  if (changes.isCompleted !== undefined && !completionChanged)
+    delete changes.isCompleted;
+
   const [card] = await db
     .update(cards)
     .set({
-      ...input,
-      ...(input.isCompleted === undefined
-        ? {}
-        : { completedAt: input.isCompleted ? new Date() : null }),
+      ...changes,
+      ...(completionChanged
+        ? { completedAt: changes.isCompleted ? new Date() : null }
+        : {}),
+      ...(fields && context
+        ? { fields: mergeFields(context.template.id, current.fields, fields) }
+        : {}),
       updatedAt: new Date(),
     })
     .where(eq(cards.id, cardId))
