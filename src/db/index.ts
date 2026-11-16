@@ -75,7 +75,11 @@ export async function localDatabase(
   const client = createClient({ url });
   await client.execute("PRAGMA foreign_keys = ON");
   // libSQL and D1 expose the same Drizzle SQLite API (query, batch, ...).
-  const database = drizzle(client, { schema }) as unknown as Database;
+  const database = drizzle(client, {
+    schema,
+    // DEBUG_SQL=1 bun dev prints every query (handy for checking indexes).
+    logger: process.env.DEBUG_SQL === "1",
+  }) as unknown as Database;
   localHolder.__dantoLocalDb = { url, database };
   return database;
 }

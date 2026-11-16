@@ -27,16 +27,8 @@ export const billingStatusEnum = enumText([
   "past_due",
   "cancelled",
 ]);
-export const billingIntervalEnum = enumText([
-  "month",
-  "year",
-]);
-export const priorityEnum = enumText([
-  "low",
-  "medium",
-  "high",
-  "urgent",
-]);
+export const billingIntervalEnum = enumText(["month", "year"]);
+export const priorityEnum = enumText(["low", "medium", "high", "urgent"]);
 
 export const approvalStatusEnum = enumText([
   "none",
@@ -51,19 +43,23 @@ export const clientFeedbackKindEnum = enumText([
   "request",
 ]);
 
-export const workspaces = sqliteTable("workspaces", {
-  id: id("id"),
-  name: text("name").notNull(),
-  brandName: text("brand_name"),
-  brandColor: text("brand_color"),
-  brandLogoUrl: text("brand_logo_url"),
-  ownerId: uuidRef("owner_id")
-    .references(() => users.id, { onDelete: "restrict" })
-    .notNull(),
-  createdAt: timestamp("created_at")
-    .$defaultFn(() => new Date())
-    .notNull(),
-});
+export const workspaces = sqliteTable(
+  "workspaces",
+  {
+    id: id("id"),
+    name: text("name").notNull(),
+    brandName: text("brand_name"),
+    brandColor: text("brand_color"),
+    brandLogoUrl: text("brand_logo_url"),
+    ownerId: uuidRef("owner_id")
+      .references(() => users.id, { onDelete: "restrict" })
+      .notNull(),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
+      .notNull(),
+  },
+  (table) => [index("workspaces_owner_idx").on(table.ownerId)],
+);
 
 export const subscriptions = sqliteTable("subscriptions", {
   userId: uuidRef("user_id")
@@ -180,6 +176,7 @@ export const paymentEvents = sqliteTable(
   (table) => [
     index("payment_event_occurred_idx").on(table.occurredAt),
     index("payment_event_user_idx").on(table.userId),
+    index("payment_event_subscription_idx").on(table.providerSubscriptionId),
   ],
 );
 
@@ -223,35 +220,38 @@ export const workspaceMembers = sqliteTable(
   },
   (table) => [
     unique("workspace_user_unique_idx").on(table.workspaceId, table.userId),
+    index("workspace_members_user_idx").on(table.userId),
   ],
 );
 
-export const boards = sqliteTable("boards", {
-  id: id("id"),
-  workspaceId: uuidRef("workspace_id")
-    .references(() => workspaces.id, { onDelete: "cascade" })
-    .notNull(),
-  name: text("name").notNull(),
-  backgroundColor: text("background_color").default("blue").notNull(),
-  template: text("template").default("blank").notNull(),
-  portalToken: text("portal_token").unique(),
-  portalEnabled: bool("portal_enabled").default(false).notNull(),
-  portalClientName: text("portal_client_name"),
-  portalClientEmail: text("portal_client_email"),
-  portalWelcome: text("portal_welcome"),
-  portalAllowRequests: bool("portal_allow_requests").default(true).notNull(),
-  /** Opt-in: AI writes and emails the client update every Friday. */
-  portalWeeklyUpdates: bool("portal_weekly_updates")
-    .default(false)
-    .notNull(),
-  portalLastAutoUpdateAt: timestamp("portal_last_auto_update_at"),
-  createdBy: uuidRef("created_by").references(() => users.id, {
-    onDelete: "set null",
-  }),
-  createdAt: timestamp("created_at")
-    .$defaultFn(() => new Date())
-    .notNull(),
-});
+export const boards = sqliteTable(
+  "boards",
+  {
+    id: id("id"),
+    workspaceId: uuidRef("workspace_id")
+      .references(() => workspaces.id, { onDelete: "cascade" })
+      .notNull(),
+    name: text("name").notNull(),
+    backgroundColor: text("background_color").default("blue").notNull(),
+    template: text("template").default("blank").notNull(),
+    portalToken: text("portal_token").unique(),
+    portalEnabled: bool("portal_enabled").default(false).notNull(),
+    portalClientName: text("portal_client_name"),
+    portalClientEmail: text("portal_client_email"),
+    portalWelcome: text("portal_welcome"),
+    portalAllowRequests: bool("portal_allow_requests").default(true).notNull(),
+    /** Opt-in: AI writes and emails the client update every Friday. */
+    portalWeeklyUpdates: bool("portal_weekly_updates").default(false).notNull(),
+    portalLastAutoUpdateAt: timestamp("portal_last_auto_update_at"),
+    createdBy: uuidRef("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
+      .notNull(),
+  },
+  (table) => [index("boards_workspace_idx").on(table.workspaceId)],
+);
 
 export const boardMembers = sqliteTable(
   "board_members",
@@ -265,7 +265,10 @@ export const boardMembers = sqliteTable(
       .notNull(),
     role: roleEnum("role").default("member").notNull(),
   },
-  (table) => [unique("board_user_unique_idx").on(table.boardId, table.userId)],
+  (table) => [
+    unique("board_user_unique_idx").on(table.boardId, table.userId),
+    index("board_members_user_idx").on(table.userId),
+  ],
 );
 
 export const lists = sqliteTable(
@@ -334,17 +337,24 @@ export const cardMembers = sqliteTable(
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
   },
-  (t) => [primaryKey({ columns: [t.cardId, t.userId] })],
+  (t) => [
+    primaryKey({ columns: [t.cardId, t.userId] }),
+    index("card_members_user_idx").on(t.userId),
+  ],
 );
 
-export const labels = sqliteTable("labels", {
-  id: id("id"),
-  boardId: uuidRef("board_id")
-    .references(() => boards.id, { onDelete: "cascade" })
-    .notNull(),
-  name: text("name").notNull(),
-  color: text("color").notNull(),
-});
+export const labels = sqliteTable(
+  "labels",
+  {
+    id: id("id"),
+    boardId: uuidRef("board_id")
+      .references(() => boards.id, { onDelete: "cascade" })
+      .notNull(),
+    name: text("name").notNull(),
+    color: text("color").notNull(),
+  },
+  (table) => [index("labels_board_idx").on(table.boardId)],
+);
 
 export const cardLabels = sqliteTable(
   "card_labels",
@@ -356,46 +366,66 @@ export const cardLabels = sqliteTable(
       .references(() => labels.id, { onDelete: "cascade" })
       .notNull(),
   },
-  (t) => [primaryKey({ columns: [t.cardId, t.labelId] })],
+  (t) => [
+    primaryKey({ columns: [t.cardId, t.labelId] }),
+    index("card_labels_label_idx").on(t.labelId),
+  ],
 );
 
-export const checklists = sqliteTable("checklists", {
-  id: id("id"),
-  cardId: uuidRef("card_id")
-    .references(() => cards.id, { onDelete: "cascade" })
-    .notNull(),
-  title: text("title").notNull(),
-  createdAt: timestamp("created_at")
-    .$defaultFn(() => new Date())
-    .notNull(),
-});
+export const checklists = sqliteTable(
+  "checklists",
+  {
+    id: id("id"),
+    cardId: uuidRef("card_id")
+      .references(() => cards.id, { onDelete: "cascade" })
+      .notNull(),
+    title: text("title").notNull(),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
+      .notNull(),
+  },
+  (table) => [index("checklists_card_idx").on(table.cardId)],
+);
 
-export const checklistItems = sqliteTable("checklist_items", {
-  id: id("id"),
-  checklistId: uuidRef("checklist_id")
-    .references(() => checklists.id, { onDelete: "cascade" })
-    .notNull(),
-  title: text("title").notNull(),
-  isDone: bool("is_done").default(false).notNull(),
-  position: integer("position").default(0).notNull(),
-  createdAt: timestamp("created_at")
-    .$defaultFn(() => new Date())
-    .notNull(),
-});
+export const checklistItems = sqliteTable(
+  "checklist_items",
+  {
+    id: id("id"),
+    checklistId: uuidRef("checklist_id")
+      .references(() => checklists.id, { onDelete: "cascade" })
+      .notNull(),
+    title: text("title").notNull(),
+    isDone: bool("is_done").default(false).notNull(),
+    position: integer("position").default(0).notNull(),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("checklist_items_checklist_idx").on(
+      table.checklistId,
+      table.position,
+    ),
+  ],
+);
 
-export const comments = sqliteTable("comments", {
-  id: id("id"),
-  cardId: uuidRef("card_id")
-    .references(() => cards.id, { onDelete: "cascade" })
-    .notNull(),
-  userId: uuidRef("user_id")
-    .references(() => users.id, { onDelete: "cascade" })
-    .notNull(),
-  content: text("content").notNull(),
-  createdAt: timestamp("created_at")
-    .$defaultFn(() => new Date())
-    .notNull(),
-});
+export const comments = sqliteTable(
+  "comments",
+  {
+    id: id("id"),
+    cardId: uuidRef("card_id")
+      .references(() => cards.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: uuidRef("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    content: text("content").notNull(),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
+      .notNull(),
+  },
+  (table) => [index("comments_card_idx").on(table.cardId, table.createdAt)],
+);
 
 /**
  * Files attached to cards (designs, drafts, videos) for client proofing.
@@ -429,6 +459,7 @@ export const cardFiles = sqliteTable(
   (table) => [
     index("card_files_card_idx").on(table.cardId, table.createdAt),
     index("card_files_workspace_idx").on(table.workspaceId),
+    index("card_files_board_idx").on(table.boardId),
   ],
 );
 
@@ -455,46 +486,63 @@ export const clientFeedback = sqliteTable(
       table.boardId,
       table.createdAt,
     ),
+    index("client_feedback_card_idx").on(table.cardId),
   ],
 );
 
-export const activityLogs = sqliteTable("activity_logs", {
-  id: id("id"),
-  userId: uuidRef("user_id")
-    .references(() => users.id, { onDelete: "cascade" })
-    .notNull(),
-  boardId: uuidRef("board_id")
-    .references(() => boards.id, { onDelete: "cascade" })
-    .notNull(),
-  cardId: uuidRef("card_id").references(() => cards.id, { onDelete: "cascade" }),
-  action: text("action").notNull(),
-  meta: json("meta"),
-  createdAt: timestamp("created_at")
-    .$defaultFn(() => new Date())
-    .notNull(),
-});
+export const activityLogs = sqliteTable(
+  "activity_logs",
+  {
+    id: id("id"),
+    userId: uuidRef("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    boardId: uuidRef("board_id")
+      .references(() => boards.id, { onDelete: "cascade" })
+      .notNull(),
+    cardId: uuidRef("card_id").references(() => cards.id, {
+      onDelete: "cascade",
+    }),
+    action: text("action").notNull(),
+    meta: json("meta"),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("activity_logs_board_idx").on(table.boardId, table.createdAt),
+    index("activity_logs_card_idx").on(table.cardId),
+  ],
+);
 
-export const invites = sqliteTable("invites", {
-  id: id("id"),
-  token: randomUuid("token").notNull().unique(),
-  email: text("email").notNull(),
-  scope: inviteScopeEnum("scope").notNull(),
-  workspaceId: uuidRef("workspace_id").references(() => workspaces.id, {
-    onDelete: "cascade",
-  }),
-  boardId: uuidRef("board_id").references(() => boards.id, {
-    onDelete: "cascade",
-  }),
-  role: roleEnum("role").default("member").notNull(),
-  invitedBy: uuidRef("invited_by")
-    .references(() => users.id, { onDelete: "cascade" })
-    .notNull(),
-  expiresAt: timestamp("expires_at").notNull(),
-  acceptedAt: timestamp("accepted_at"),
-  createdAt: timestamp("created_at")
-    .$defaultFn(() => new Date())
-    .notNull(),
-});
+export const invites = sqliteTable(
+  "invites",
+  {
+    id: id("id"),
+    token: randomUuid("token").notNull().unique(),
+    email: text("email").notNull(),
+    scope: inviteScopeEnum("scope").notNull(),
+    workspaceId: uuidRef("workspace_id").references(() => workspaces.id, {
+      onDelete: "cascade",
+    }),
+    boardId: uuidRef("board_id").references(() => boards.id, {
+      onDelete: "cascade",
+    }),
+    role: roleEnum("role").default("member").notNull(),
+    invitedBy: uuidRef("invited_by")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    acceptedAt: timestamp("accepted_at"),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("invites_workspace_idx").on(table.workspaceId),
+    index("invites_board_idx").on(table.boardId),
+  ],
+);
 
 export const usersRelations = relations(users, ({ many }) => ({
   workspaceMemberships: many(workspaceMembers),

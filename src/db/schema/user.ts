@@ -8,22 +8,26 @@ import {
 } from "drizzle-orm/sqlite-core";
 import { bool, enumText, id, json, timestamp, uuidRef } from "./columns";
 
-export const users = sqliteTable("users", {
-  id: id("id"),
-  name: text("name").notNull(),
-  email: text("email").notNull().unique(),
-  passwordHash: text("password_hash").notNull(),
-  avatarUrl: text("avatar_url"),
-  isAdmin: bool("is_admin").default(false).notNull(),
-  /** Refresh tokens issued before this moment are rejected. */
-  passwordChangedAt: timestamp("password_changed_at"),
-  lastSeenAt: timestamp("last_seen_at"),
-  suspendedAt: timestamp("suspended_at"),
-  signupSource: text("signup_source"),
-  createdAt: timestamp("created_at")
-    .$defaultFn(() => new Date())
-    .notNull(),
-});
+export const users = sqliteTable(
+  "users",
+  {
+    id: id("id"),
+    name: text("name").notNull(),
+    email: text("email").notNull().unique(),
+    passwordHash: text("password_hash").notNull(),
+    avatarUrl: text("avatar_url"),
+    isAdmin: bool("is_admin").default(false).notNull(),
+    /** Refresh tokens issued before this moment are rejected. */
+    passwordChangedAt: timestamp("password_changed_at"),
+    lastSeenAt: timestamp("last_seen_at"),
+    suspendedAt: timestamp("suspended_at"),
+    signupSource: text("signup_source"),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
+      .notNull(),
+  },
+  (table) => [index("users_created_idx").on(table.createdAt)],
+);
 
 export const passwordResets = sqliteTable(
   "password_resets",
@@ -40,7 +44,9 @@ export const passwordResets = sqliteTable(
       .$defaultFn(() => new Date())
       .notNull(),
   },
-  (table) => [index("password_resets_user_idx").on(table.userId, table.createdAt)],
+  (table) => [
+    index("password_resets_user_idx").on(table.userId, table.createdAt),
+  ],
 );
 
 export const adminAuditLogs = sqliteTable(

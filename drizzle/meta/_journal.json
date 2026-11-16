@@ -8,6 +8,13 @@
       "when": 1794847680778,
       "tag": "0000_init_d1",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1794848281507,
+      "tag": "0001_fk_indexes",
+      "breakpoints": true
     }
   ]
 }
