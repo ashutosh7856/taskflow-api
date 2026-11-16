@@ -112,7 +112,8 @@ async function nextStage(
       : boardLists
           .slice(0, index)
           .reverse()
-          .find((list) => list.role === "active");
+          // Older boards' working lists have no role; treat them as active.
+          .find((list) => list.role === "active" || !list.role);
   if (!target) return {};
   const [{ highest }] = await db
     .select({ highest: max(cards.position) })
