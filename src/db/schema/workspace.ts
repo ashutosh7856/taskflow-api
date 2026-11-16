@@ -1,69 +1,72 @@
 import { relations } from "drizzle-orm";
 import {
-  boolean,
   index,
   integer,
-  jsonb,
-  numeric,
-  pgEnum,
-  pgTable,
   primaryKey,
+  sqliteTable,
   text,
-  timestamp,
   unique,
-  uuid,
-} from "drizzle-orm/pg-core";
+} from "drizzle-orm/sqlite-core";
+import {
+  bool,
+  enumText,
+  id,
+  json,
+  randomUuid,
+  timestamp,
+  uuidRef,
+} from "./columns";
 import { users } from "./user";
 
-export const roleEnum = pgEnum("role", ["owner", "admin", "member"]);
-export const inviteScopeEnum = pgEnum("invite_scope", ["workspace", "board"]);
-export const planEnum = pgEnum("plan", ["free", "pro", "business"]);
-export const billingStatusEnum = pgEnum("billing_status", [
+export const roleEnum = enumText(["owner", "admin", "member"]);
+export const inviteScopeEnum = enumText(["workspace", "board"]);
+export const planEnum = enumText(["free", "pro", "business"]);
+export const billingStatusEnum = enumText([
   "inactive",
   "active",
   "past_due",
   "cancelled",
 ]);
-export const billingIntervalEnum = pgEnum("billing_interval", [
+export const billingIntervalEnum = enumText([
   "month",
   "year",
 ]);
-export const priorityEnum = pgEnum("priority", [
+export const priorityEnum = enumText([
   "low",
   "medium",
   "high",
   "urgent",
 ]);
 
-export const approvalStatusEnum = pgEnum("approval_status", [
+export const approvalStatusEnum = enumText([
   "none",
   "pending",
   "approved",
   "changes_requested",
 ]);
-export const clientFeedbackKindEnum = pgEnum("client_feedback_kind", [
+export const clientFeedbackKindEnum = enumText([
   "comment",
   "approved",
   "changes_requested",
   "request",
 ]);
 
-export const workspaces = pgTable("workspaces", {
-  id: uuid("id").primaryKey().defaultRandom(),
+export const workspaces = sqliteTable("workspaces", {
+  id: id("id"),
   name: text("name").notNull(),
   brandName: text("brand_name"),
   brandColor: text("brand_color"),
   brandLogoUrl: text("brand_logo_url"),
-  ownerId: uuid("owner_id")
+  ownerId: uuidRef("owner_id")
     .references(() => users.id, { onDelete: "restrict" })
     .notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
+  createdAt: timestamp("created_at")
+    .$defaultFn(() => new Date())
     .notNull(),
 });
 
-export const subscriptions = pgTable("subscriptions", {
-  userId: uuid("user_id")
+export const subscriptions = sqliteTable("subscriptions", {
+  userId: uuidRef("user_id")
     .primaryKey()
     .references(() => users.id, { onDelete: "cascade" }),
   plan: planEnum("plan").default("free").notNull(),
@@ -74,22 +77,22 @@ export const subscriptions = pgTable("subscriptions", {
   billingInterval: billingIntervalEnum("billing_interval")
     .default("month")
     .notNull(),
-  discountCodeId: uuid("discount_code_id"),
-  currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+  discountCodeId: uuidRef("discount_code_id"),
+  currentPeriodEnd: timestamp("current_period_end"),
   aiRequestsThisMonth: integer("ai_requests_this_month").default(0).notNull(),
-  aiPeriodStart: timestamp("ai_period_start", { withTimezone: true })
-    .defaultNow()
+  aiPeriodStart: timestamp("ai_period_start")
+    .$defaultFn(() => new Date())
     .notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
+  updatedAt: timestamp("updated_at")
+    .$defaultFn(() => new Date())
     .notNull(),
 });
 
-export const aiUsageEvents = pgTable(
+export const aiUsageEvents = sqliteTable(
   "ai_usage_events",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
+    id: id("id"),
+    userId: uuidRef("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     feature: text("feature").notNull(),
@@ -99,8 +102,8 @@ export const aiUsageEvents = pgTable(
     estimatedCostMicrousd: integer("estimated_cost_microusd")
       .default(0)
       .notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
       .notNull(),
   },
   (table) => [
@@ -108,43 +111,43 @@ export const aiUsageEvents = pgTable(
   ],
 );
 
-export const discountCodes = pgTable(
+export const discountCodes = sqliteTable(
   "discount_codes",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: id("id"),
     code: text("code").notNull().unique(),
     percentOff: integer("percent_off").notNull(),
     plan: planEnum("discount_plan"),
     maxRedemptions: integer("max_redemptions"),
     redemptionCount: integer("redemption_count").default(0).notNull(),
-    active: boolean("active").default(true).notNull(),
-    startsAt: timestamp("starts_at", { withTimezone: true }),
-    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    active: bool("active").default(true).notNull(),
+    startsAt: timestamp("starts_at"),
+    expiresAt: timestamp("expires_at"),
     paypalProPlanId: text("paypal_pro_plan_id").unique(),
     paypalBusinessPlanId: text("paypal_business_plan_id").unique(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
+    updatedAt: timestamp("updated_at")
+      .$defaultFn(() => new Date())
       .notNull(),
   },
   (table) => [index("discount_code_active_idx").on(table.active, table.code)],
 );
 
-export const discountRedemptions = pgTable(
+export const discountRedemptions = sqliteTable(
   "discount_redemptions",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    discountCodeId: uuid("discount_code_id")
+    id: id("id"),
+    discountCodeId: uuidRef("discount_code_id")
       .references(() => discountCodes.id, { onDelete: "restrict" })
       .notNull(),
-    userId: uuid("user_id")
+    userId: uuidRef("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     plan: planEnum("plan").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
       .notNull(),
   },
   (table) => [
@@ -155,23 +158,23 @@ export const discountRedemptions = pgTable(
   ],
 );
 
-export const paymentEvents = pgTable(
+export const paymentEvents = sqliteTable(
   "payment_events",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: id("id"),
     provider: text("provider").notNull(),
     providerEventId: text("provider_event_id").notNull().unique(),
     providerSubscriptionId: text("provider_subscription_id"),
-    userId: uuid("user_id").references(() => users.id, {
+    userId: uuidRef("user_id").references(() => users.id, {
       onDelete: "set null",
     }),
     plan: planEnum("plan"),
     status: text("status").notNull(),
-    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    amount: text("amount").notNull(),
     currency: text("currency").notNull(),
-    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
+    occurredAt: timestamp("occurred_at").notNull(),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
       .notNull(),
   },
   (table) => [
@@ -180,42 +183,42 @@ export const paymentEvents = pgTable(
   ],
 );
 
-export const billingPlans = pgTable("billing_plans", {
+export const billingPlans = sqliteTable("billing_plans", {
   plan: planEnum("plan").primaryKey(),
   paypalProductId: text("paypal_product_id").notNull(),
   paypalPlanId: text("paypal_plan_id").notNull().unique(),
   priceUsd: integer("price_usd").notNull(),
-  active: boolean("active").default(true).notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
+  active: bool("active").default(true).notNull(),
+  createdAt: timestamp("created_at")
+    .$defaultFn(() => new Date())
     .notNull(),
 });
 
 /** PayPal yearly plans (monthly ones live in billing_plans). */
-export const annualBillingPlans = pgTable("annual_billing_plans", {
+export const annualBillingPlans = sqliteTable("annual_billing_plans", {
   plan: planEnum("plan").primaryKey(),
   paypalProductId: text("paypal_product_id").notNull(),
   paypalPlanId: text("paypal_plan_id").notNull().unique(),
   priceUsd: integer("price_usd").notNull(),
-  active: boolean("active").default(true).notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
+  active: bool("active").default(true).notNull(),
+  createdAt: timestamp("created_at")
+    .$defaultFn(() => new Date())
     .notNull(),
 });
 
-export const workspaceMembers = pgTable(
+export const workspaceMembers = sqliteTable(
   "workspace_members",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
+    id: id("id"),
+    userId: uuidRef("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
-    workspaceId: uuid("workspace_id")
+    workspaceId: uuidRef("workspace_id")
       .references(() => workspaces.id, { onDelete: "cascade" })
       .notNull(),
     role: roleEnum("role").default("member").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
       .notNull(),
   },
   (table) => [
@@ -223,43 +226,41 @@ export const workspaceMembers = pgTable(
   ],
 );
 
-export const boards = pgTable("boards", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  workspaceId: uuid("workspace_id")
+export const boards = sqliteTable("boards", {
+  id: id("id"),
+  workspaceId: uuidRef("workspace_id")
     .references(() => workspaces.id, { onDelete: "cascade" })
     .notNull(),
   name: text("name").notNull(),
   backgroundColor: text("background_color").default("blue").notNull(),
   template: text("template").default("blank").notNull(),
   portalToken: text("portal_token").unique(),
-  portalEnabled: boolean("portal_enabled").default(false).notNull(),
+  portalEnabled: bool("portal_enabled").default(false).notNull(),
   portalClientName: text("portal_client_name"),
   portalClientEmail: text("portal_client_email"),
   portalWelcome: text("portal_welcome"),
-  portalAllowRequests: boolean("portal_allow_requests").default(true).notNull(),
+  portalAllowRequests: bool("portal_allow_requests").default(true).notNull(),
   /** Opt-in: AI writes and emails the client update every Friday. */
-  portalWeeklyUpdates: boolean("portal_weekly_updates")
+  portalWeeklyUpdates: bool("portal_weekly_updates")
     .default(false)
     .notNull(),
-  portalLastAutoUpdateAt: timestamp("portal_last_auto_update_at", {
-    withTimezone: true,
-  }),
-  createdBy: uuid("created_by").references(() => users.id, {
+  portalLastAutoUpdateAt: timestamp("portal_last_auto_update_at"),
+  createdBy: uuidRef("created_by").references(() => users.id, {
     onDelete: "set null",
   }),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
+  createdAt: timestamp("created_at")
+    .$defaultFn(() => new Date())
     .notNull(),
 });
 
-export const boardMembers = pgTable(
+export const boardMembers = sqliteTable(
   "board_members",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    boardId: uuid("board_id")
+    id: id("id"),
+    boardId: uuidRef("board_id")
       .references(() => boards.id, { onDelete: "cascade" })
       .notNull(),
-    userId: uuid("user_id")
+    userId: uuidRef("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     role: roleEnum("role").default("member").notNull(),
@@ -267,17 +268,17 @@ export const boardMembers = pgTable(
   (table) => [unique("board_user_unique_idx").on(table.boardId, table.userId)],
 );
 
-export const lists = pgTable(
+export const lists = sqliteTable(
   "lists",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    boardId: uuid("board_id")
+    id: id("id"),
+    boardId: uuidRef("board_id")
       .references(() => boards.id, { onDelete: "cascade" })
       .notNull(),
     name: text("name").notNull(),
     position: integer("position").default(0).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
       .notNull(),
   },
   (table) => [
@@ -285,41 +286,37 @@ export const lists = pgTable(
   ],
 );
 
-export const cards = pgTable(
+export const cards = sqliteTable(
   "cards",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    listId: uuid("list_id")
+    id: id("id"),
+    listId: uuidRef("list_id")
       .references(() => lists.id, { onDelete: "cascade" })
       .notNull(),
     title: text("title").notNull(),
     description: text("description"),
     position: integer("position").default(0).notNull(),
-    createdBy: uuid("created_by").references(() => users.id, {
+    createdBy: uuidRef("created_by").references(() => users.id, {
       onDelete: "set null",
     }),
-    isArchived: boolean("is_archived").default(false).notNull(),
-    isCompleted: boolean("is_completed").default(false).notNull(),
-    completedAt: timestamp("completed_at", { withTimezone: true }),
+    isArchived: bool("is_archived").default(false).notNull(),
+    isCompleted: bool("is_completed").default(false).notNull(),
+    completedAt: timestamp("completed_at"),
     category: text("category").default("task").notNull(),
-    dueDate: timestamp("due_date", { withTimezone: true }),
+    dueDate: timestamp("due_date"),
     priority: priorityEnum("priority").default("medium").notNull(),
     estimateMinutes: integer("estimate_minutes"),
-    clientVisible: boolean("client_visible").default(true).notNull(),
+    clientVisible: bool("client_visible").default(true).notNull(),
     approvalStatus: approvalStatusEnum("approval_status")
       .default("none")
       .notNull(),
-    approvalRequestedAt: timestamp("approval_requested_at", {
-      withTimezone: true,
-    }),
-    approvalRespondedAt: timestamp("approval_responded_at", {
-      withTimezone: true,
-    }),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
+    approvalRequestedAt: timestamp("approval_requested_at"),
+    approvalRespondedAt: timestamp("approval_responded_at"),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
       .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
+    updatedAt: timestamp("updated_at")
+      .$defaultFn(() => new Date())
       .notNull(),
   },
   (table) => [
@@ -327,76 +324,76 @@ export const cards = pgTable(
   ],
 );
 
-export const cardMembers = pgTable(
+export const cardMembers = sqliteTable(
   "card_members",
   {
-    cardId: uuid("card_id")
+    cardId: uuidRef("card_id")
       .references(() => cards.id, { onDelete: "cascade" })
       .notNull(),
-    userId: uuid("user_id")
+    userId: uuidRef("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
   },
   (t) => [primaryKey({ columns: [t.cardId, t.userId] })],
 );
 
-export const labels = pgTable("labels", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  boardId: uuid("board_id")
+export const labels = sqliteTable("labels", {
+  id: id("id"),
+  boardId: uuidRef("board_id")
     .references(() => boards.id, { onDelete: "cascade" })
     .notNull(),
   name: text("name").notNull(),
   color: text("color").notNull(),
 });
 
-export const cardLabels = pgTable(
+export const cardLabels = sqliteTable(
   "card_labels",
   {
-    cardId: uuid("card_id")
+    cardId: uuidRef("card_id")
       .references(() => cards.id, { onDelete: "cascade" })
       .notNull(),
-    labelId: uuid("label_id")
+    labelId: uuidRef("label_id")
       .references(() => labels.id, { onDelete: "cascade" })
       .notNull(),
   },
   (t) => [primaryKey({ columns: [t.cardId, t.labelId] })],
 );
 
-export const checklists = pgTable("checklists", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  cardId: uuid("card_id")
+export const checklists = sqliteTable("checklists", {
+  id: id("id"),
+  cardId: uuidRef("card_id")
     .references(() => cards.id, { onDelete: "cascade" })
     .notNull(),
   title: text("title").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
+  createdAt: timestamp("created_at")
+    .$defaultFn(() => new Date())
     .notNull(),
 });
 
-export const checklistItems = pgTable("checklist_items", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  checklistId: uuid("checklist_id")
+export const checklistItems = sqliteTable("checklist_items", {
+  id: id("id"),
+  checklistId: uuidRef("checklist_id")
     .references(() => checklists.id, { onDelete: "cascade" })
     .notNull(),
   title: text("title").notNull(),
-  isDone: boolean("is_done").default(false).notNull(),
+  isDone: bool("is_done").default(false).notNull(),
   position: integer("position").default(0).notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
+  createdAt: timestamp("created_at")
+    .$defaultFn(() => new Date())
     .notNull(),
 });
 
-export const comments = pgTable("comments", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  cardId: uuid("card_id")
+export const comments = sqliteTable("comments", {
+  id: id("id"),
+  cardId: uuidRef("card_id")
     .references(() => cards.id, { onDelete: "cascade" })
     .notNull(),
-  userId: uuid("user_id")
+  userId: uuidRef("user_id")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   content: text("content").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
+  createdAt: timestamp("created_at")
+    .$defaultFn(() => new Date())
     .notNull(),
 });
 
@@ -405,28 +402,28 @@ export const comments = pgTable("comments", {
  * Bytes live in R2 under `storageKey`; this row is the index and quota
  * source. workspaceId is kept so storage can be summed per owner cheaply.
  */
-export const cardFiles = pgTable(
+export const cardFiles = sqliteTable(
   "card_files",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    cardId: uuid("card_id")
+    id: id("id"),
+    cardId: uuidRef("card_id")
       .references(() => cards.id, { onDelete: "cascade" })
       .notNull(),
-    boardId: uuid("board_id")
+    boardId: uuidRef("board_id")
       .references(() => boards.id, { onDelete: "cascade" })
       .notNull(),
-    workspaceId: uuid("workspace_id")
+    workspaceId: uuidRef("workspace_id")
       .references(() => workspaces.id, { onDelete: "cascade" })
       .notNull(),
-    uploadedBy: uuid("uploaded_by").references(() => users.id, {
+    uploadedBy: uuidRef("uploaded_by").references(() => users.id, {
       onDelete: "set null",
     }),
     name: text("name").notNull(),
     contentType: text("content_type").notNull(),
     size: integer("size").notNull(),
     storageKey: text("storage_key").notNull().unique(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
       .notNull(),
   },
   (table) => [
@@ -435,22 +432,22 @@ export const cardFiles = pgTable(
   ],
 );
 
-export const clientFeedback = pgTable(
+export const clientFeedback = sqliteTable(
   "client_feedback",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    boardId: uuid("board_id")
+    id: id("id"),
+    boardId: uuidRef("board_id")
       .references(() => boards.id, { onDelete: "cascade" })
       .notNull(),
-    cardId: uuid("card_id").references(() => cards.id, {
+    cardId: uuidRef("card_id").references(() => cards.id, {
       onDelete: "cascade",
     }),
     kind: clientFeedbackKindEnum("kind").notNull(),
     authorName: text("author_name").notNull(),
     message: text("message").notNull(),
-    readAt: timestamp("read_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
+    readAt: timestamp("read_at"),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
       .notNull(),
   },
   (table) => [
@@ -461,41 +458,41 @@ export const clientFeedback = pgTable(
   ],
 );
 
-export const activityLogs = pgTable("activity_logs", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id")
+export const activityLogs = sqliteTable("activity_logs", {
+  id: id("id"),
+  userId: uuidRef("user_id")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
-  boardId: uuid("board_id")
+  boardId: uuidRef("board_id")
     .references(() => boards.id, { onDelete: "cascade" })
     .notNull(),
-  cardId: uuid("card_id").references(() => cards.id, { onDelete: "cascade" }),
+  cardId: uuidRef("card_id").references(() => cards.id, { onDelete: "cascade" }),
   action: text("action").notNull(),
-  meta: jsonb("meta"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
+  meta: json("meta"),
+  createdAt: timestamp("created_at")
+    .$defaultFn(() => new Date())
     .notNull(),
 });
 
-export const invites = pgTable("invites", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  token: uuid("token").defaultRandom().notNull().unique(),
+export const invites = sqliteTable("invites", {
+  id: id("id"),
+  token: randomUuid("token").notNull().unique(),
   email: text("email").notNull(),
   scope: inviteScopeEnum("scope").notNull(),
-  workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+  workspaceId: uuidRef("workspace_id").references(() => workspaces.id, {
     onDelete: "cascade",
   }),
-  boardId: uuid("board_id").references(() => boards.id, {
+  boardId: uuidRef("board_id").references(() => boards.id, {
     onDelete: "cascade",
   }),
   role: roleEnum("role").default("member").notNull(),
-  invitedBy: uuid("invited_by")
+  invitedBy: uuidRef("invited_by")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-  acceptedAt: timestamp("accepted_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
+  expiresAt: timestamp("expires_at").notNull(),
+  acceptedAt: timestamp("accepted_at"),
+  createdAt: timestamp("created_at")
+    .$defaultFn(() => new Date())
     .notNull(),
 });
 

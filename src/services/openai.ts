@@ -199,75 +199,77 @@ export async function reserveAiRequest(
   const now = new Date();
   const hourAgo = new Date(now.getTime() - 60 * 60 * 1000);
   const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${userId}))`);
-    const current = await tx.query.subscriptions.findFirst({
-      where: eq(subscriptions.userId, userId),
+  // D1 has no row locks or interactive transactions. Checks run first, then
+  // the usage event and the counter update are written in one atomic batch.
+  const current = await db.query.subscriptions.findFirst({
+    where: eq(subscriptions.userId, userId),
+  });
+  if (!current) throw new HttpError(404, "Subscription not found");
+  const periodExpired =
+    now.getTime() - current.aiPeriodStart.getTime() > 30 * 24 * 60 * 60 * 1000;
+  const used = periodExpired ? 0 : current.aiRequestsThisMonth;
+  const monthlyLimit = planCatalog[plan].aiRequests;
+  if (monthlyLimit !== null && used >= monthlyLimit) {
+    throw new HttpError(402, `AI limit reached for the ${plan} plan`, {
+      limit: monthlyLimit,
+      upgradeRequired: true,
     });
-    if (!current) throw new HttpError(404, "Subscription not found");
-    const periodExpired =
-      now.getTime() - current.aiPeriodStart.getTime() >
-      30 * 24 * 60 * 60 * 1000;
-    const used = periodExpired ? 0 : current.aiRequestsThisMonth;
-    const monthlyLimit = planCatalog[plan].aiRequests;
-    if (monthlyLimit !== null && used >= monthlyLimit) {
-      throw new HttpError(402, `AI limit reached for the ${plan} plan`, {
-        limit: monthlyLimit,
-        upgradeRequired: true,
-      });
-    }
-    const [hourly, daily] = await Promise.all([
-      tx
-        .select({ total: count() })
-        .from(aiUsageEvents)
-        .where(
-          and(
-            eq(aiUsageEvents.userId, userId),
-            gte(aiUsageEvents.createdAt, hourAgo),
-          ),
+  }
+  const [hourly, daily] = await Promise.all([
+    db
+      .select({ total: count() })
+      .from(aiUsageEvents)
+      .where(
+        and(
+          eq(aiUsageEvents.userId, userId),
+          gte(aiUsageEvents.createdAt, hourAgo),
         ),
-      tx
-        .select({ total: count() })
-        .from(aiUsageEvents)
-        .where(
-          and(
-            eq(aiUsageEvents.userId, userId),
-            gte(aiUsageEvents.createdAt, dayAgo),
-          ),
+      ),
+    db
+      .select({ total: count() })
+      .from(aiUsageEvents)
+      .where(
+        and(
+          eq(aiUsageEvents.userId, userId),
+          gte(aiUsageEvents.createdAt, dayAgo),
         ),
-    ]);
-    if (Number(hourly[0].total) >= limits.aiHourlyRequests) {
-      throw new HttpError(
-        429,
-        "AI is being used too quickly. Try again in about an hour.",
-        { retryAfterSeconds: 3600, fairUseLimit: limits.aiHourlyRequests },
-      );
-    }
-    if (Number(daily[0].total) >= limits.aiDailyRequests) {
-      throw new HttpError(
-        429,
-        "Daily AI fair-use limit reached. Try again tomorrow.",
-        { retryAfterSeconds: 86400, fairUseLimit: limits.aiDailyRequests },
-      );
-    }
-    const [event] = await tx
-      .insert(aiUsageEvents)
-      .values({
-        userId,
-        feature,
-        inputCharacters,
-      })
-      .returning({ id: aiUsageEvents.id });
-    await tx
+      ),
+  ]);
+  if (Number(hourly[0].total) >= limits.aiHourlyRequests) {
+    throw new HttpError(
+      429,
+      "AI is being used too quickly. Try again in about an hour.",
+      { retryAfterSeconds: 3600, fairUseLimit: limits.aiHourlyRequests },
+    );
+  }
+  if (Number(daily[0].total) >= limits.aiDailyRequests) {
+    throw new HttpError(
+      429,
+      "Daily AI fair-use limit reached. Try again tomorrow.",
+      { retryAfterSeconds: 86400, fairUseLimit: limits.aiDailyRequests },
+    );
+  }
+  const eventId = crypto.randomUUID();
+  await db.batch([
+    db.insert(aiUsageEvents).values({
+      id: eventId,
+      userId,
+      feature,
+      inputCharacters,
+    }),
+    db
       .update(subscriptions)
       .set({
-        aiRequestsThisMonth: used + 1,
+        // Relative increment so two concurrent requests both count.
+        aiRequestsThisMonth: periodExpired
+          ? 1
+          : sql`${subscriptions.aiRequestsThisMonth} + 1`,
         ...(periodExpired ? { aiPeriodStart: now } : {}),
         updatedAt: now,
       })
-      .where(eq(subscriptions.userId, userId));
-    return { eventId: event.id, used: used + 1 };
-  });
+      .where(eq(subscriptions.userId, userId)),
+  ]);
+  return { eventId, used: used + 1 };
 }
 
 export async function recordAiUse(eventId: string, usage: AiTokenUsage) {

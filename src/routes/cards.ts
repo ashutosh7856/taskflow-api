@@ -69,27 +69,23 @@ cardsRouter.post("/lists/:listId/cards", async (c) => {
       );
     }
   }
-  const card = await db.transaction(async (tx) => {
-    const [created] = await tx
+  const cardId = crypto.randomUUID();
+  const [[card]] = await db.batch([
+    db
       .insert(cards)
       .values({
         ...cardInput,
+        id: cardId,
         listId,
         createdBy: userId,
         completedAt: cardInput.isCompleted ? new Date() : null,
         position: cardInput.position ?? Number(highestPosition ?? -1) + 1,
       })
-      .returning();
-    if (labelIds.length) {
-      await tx.insert(cardLabels).values(
-        [...new Set(labelIds)].map((labelId) => ({
-          cardId: created.id,
-          labelId,
-        })),
-      );
-    }
-    return created;
-  });
+      .returning(),
+    ...[...new Set(labelIds)].map((labelId) =>
+      db.insert(cardLabels).values({ cardId, labelId }),
+    ),
+  ]);
 
   await recordActivity(userId, boardId, "card.created", card.id);
   return c.json(card, 201);

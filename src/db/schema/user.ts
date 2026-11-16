@@ -1,63 +1,62 @@
 import {
-  boolean,
   index,
   integer,
-  jsonb,
-  pgTable,
+  primaryKey,
+  sqliteTable,
   text,
-  timestamp,
-  uuid,
-} from "drizzle-orm/pg-core";
+  unique,
+} from "drizzle-orm/sqlite-core";
+import { bool, enumText, id, json, timestamp, uuidRef } from "./columns";
 
-export const users = pgTable("users", {
-  id: uuid("id").primaryKey().defaultRandom(),
+export const users = sqliteTable("users", {
+  id: id("id"),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   avatarUrl: text("avatar_url"),
-  isAdmin: boolean("is_admin").default(false).notNull(),
+  isAdmin: bool("is_admin").default(false).notNull(),
   /** Refresh tokens issued before this moment are rejected. */
-  passwordChangedAt: timestamp("password_changed_at", { withTimezone: true }),
-  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
-  suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+  passwordChangedAt: timestamp("password_changed_at"),
+  lastSeenAt: timestamp("last_seen_at"),
+  suspendedAt: timestamp("suspended_at"),
   signupSource: text("signup_source"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
+  createdAt: timestamp("created_at")
+    .$defaultFn(() => new Date())
     .notNull(),
 });
 
-export const passwordResets = pgTable(
+export const passwordResets = sqliteTable(
   "password_resets",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
+    id: id("id"),
+    userId: uuidRef("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     codeHash: text("code_hash").notNull(),
     attempts: integer("attempts").default(0).notNull(),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    usedAt: timestamp("used_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
+    expiresAt: timestamp("expires_at").notNull(),
+    usedAt: timestamp("used_at"),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
       .notNull(),
   },
   (table) => [index("password_resets_user_idx").on(table.userId, table.createdAt)],
 );
 
-export const adminAuditLogs = pgTable(
+export const adminAuditLogs = sqliteTable(
   "admin_audit_logs",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    adminId: uuid("admin_id").references(() => users.id, {
+    id: id("id"),
+    adminId: uuidRef("admin_id").references(() => users.id, {
       onDelete: "set null",
     }),
     action: text("action").notNull(),
-    targetUserId: uuid("target_user_id").references(() => users.id, {
+    targetUserId: uuidRef("target_user_id").references(() => users.id, {
       onDelete: "set null",
     }),
-    meta: jsonb("meta"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
+    meta: json("meta"),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
       .notNull(),
   },
   (table) => [index("admin_audit_created_idx").on(table.createdAt)],
@@ -67,17 +66,17 @@ export const adminAuditLogs = pgTable(
  * One-time sign-in codes for the admin panel. Codes are only ever emailed to
  * the configured admin address; the row stores a hash, never the code.
  */
-export const adminLoginCodes = pgTable(
+export const adminLoginCodes = sqliteTable(
   "admin_login_codes",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: id("id"),
     codeHash: text("code_hash").notNull(),
     attempts: integer("attempts").default(0).notNull(),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    usedAt: timestamp("used_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at").notNull(),
+    usedAt: timestamp("used_at"),
     requestIp: text("request_ip"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
       .notNull(),
   },
   (table) => [index("admin_login_codes_created_idx").on(table.createdAt)],

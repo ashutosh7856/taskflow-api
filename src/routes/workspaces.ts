@@ -46,20 +46,14 @@ workspacesRouter.post("/workspaces", async (c) => {
   const userId = c.get("userId");
   await assertWorkspaceCreationAvailable(userId);
 
-  const workspace = await db.transaction(async (tx) => {
-    const [created] = await tx
+  const workspaceId = crypto.randomUUID();
+  const [[workspace]] = await db.batch([
+    db
       .insert(workspaces)
-      .values({ ...input, ownerId: userId })
-      .returning();
-
-    await tx.insert(workspaceMembers).values({
-      workspaceId: created.id,
-      userId,
-      role: "owner",
-    });
-
-    return created;
-  });
+      .values({ ...input, id: workspaceId, ownerId: userId })
+      .returning(),
+    db.insert(workspaceMembers).values({ workspaceId, userId, role: "owner" }),
+  ]);
 
   return c.json(workspace, 201);
 });

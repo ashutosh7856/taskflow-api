@@ -5,7 +5,7 @@ import {
   desc,
   eq,
   gte,
-  ilike,
+  like,
   inArray,
   isNotNull,
   or,
@@ -154,7 +154,7 @@ async function overviewData() {
       .where(gte(clientFeedback.createdAt, d30)),
     db
       .select({
-        day: sql<string>`to_char(date_trunc('day', ${users.createdAt}), 'YYYY-MM-DD')`,
+        day: sql<string>`strftime('%Y-%m-%d', ${users.createdAt} / 1000, 'unixepoch')`,
         total: count(),
       })
       .from(users)
@@ -163,7 +163,7 @@ async function overviewData() {
       .orderBy(sql`1`),
     db
       .select({
-        day: sql<string>`to_char(date_trunc('day', ${paymentEvents.occurredAt}), 'YYYY-MM-DD')`,
+        day: sql<string>`strftime('%Y-%m-%d', ${paymentEvents.occurredAt} / 1000, 'unixepoch')`,
         amount: sum(paymentEvents.amount),
       })
       .from(paymentEvents)
@@ -349,7 +349,7 @@ adminRouter.get("/admin/users", async (c) => {
   const conditions = [];
   if (search)
     conditions.push(
-      or(ilike(users.email, `%${search}%`), ilike(users.name, `%${search}%`)),
+      or(like(users.email, `%${search}%`), like(users.name, `%${search}%`)),
     );
   if (filter === "paying")
     conditions.push(

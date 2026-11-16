@@ -13,8 +13,13 @@
   // Query caching stays OFF: boards are edited collaboratively, and a cached
   // SELECT right after a write would show stale cards. Safe caching is done in
   // code instead (src/lib/cache.ts).
-  "hyperdrive": [
-    { "binding": "HYPERDRIVE", "id": "418f3c204e2b480388f1f57a6af5d1a2" }
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "danto-db",
+      "database_id": "581df78d-d979-41a9-ac8f-82a5be87d75e",
+      "migrations_dir": "drizzle"
+    }
   ],
   // Card files for client proofing (off until R2 is enabled on the account).
   // To turn on: `npx wrangler r2 bucket create danto-files`, then uncomment:

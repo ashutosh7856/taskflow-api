@@ -101,36 +101,28 @@ boardsRouter.post("/workspaces/:workspaceId/boards", async (c) => {
   );
   const { template, ...boardInput } = input;
 
-  const board = await db.transaction(async (tx) => {
-    const [created] = await tx
+  // One row per statement keeps each under D1's 100 bound-parameter limit;
+  // the batch commits them all or none.
+  const boardId = crypto.randomUUID();
+  const [[board]] = await db.batch([
+    db
       .insert(boards)
-      .values({ ...boardInput, template, workspaceId, createdBy: userId })
-      .returning();
-
-    await tx.insert(boardMembers).values({
-      boardId: created.id,
-      userId,
-      role: "owner",
-    });
-    const templateLists = boardTemplates[template];
-    if (templateLists.length) {
-      await tx.insert(lists).values(
-        templateLists.map((name, position) => ({
-          boardId: created.id,
-          name,
-          position,
-        })),
-      );
-    }
-    await tx.insert(labels).values(
-      templateLabels[template].map((label) => ({
-        ...label,
-        boardId: created.id,
-      })),
-    );
-
-    return created;
-  });
+      .values({
+        ...boardInput,
+        id: boardId,
+        template,
+        workspaceId,
+        createdBy: userId,
+      })
+      .returning(),
+    db.insert(boardMembers).values({ boardId, userId, role: "owner" }),
+    ...boardTemplates[template].map((name, position) =>
+      db.insert(lists).values({ boardId, name, position }),
+    ),
+    ...templateLabels[template].map((label) =>
+      db.insert(labels).values({ ...label, boardId }),
+    ),
+  ]);
 
   return c.json(board, 201);
 });
@@ -274,29 +266,29 @@ boardsRouter.delete("/boards/:id/members/:userId", async (c) => {
     throw new HttpError(400, "The board owner cannot be removed");
   }
 
-  await db.transaction(async (tx) => {
-    const boardCardIds = tx
-      .select({ id: cards.id })
-      .from(cards)
-      .innerJoin(lists, eq(cards.listId, lists.id))
-      .where(eq(lists.boardId, boardId));
-    await tx
+  const boardCardIds = db
+    .select({ id: cards.id })
+    .from(cards)
+    .innerJoin(lists, eq(cards.listId, lists.id))
+    .where(eq(lists.boardId, boardId));
+  await db.batch([
+    db
       .delete(cardMembers)
       .where(
         and(
           eq(cardMembers.userId, targetUserId),
           inArray(cardMembers.cardId, boardCardIds),
         ),
-      );
-    await tx
+      ),
+    db
       .delete(boardMembers)
       .where(
         and(
           eq(boardMembers.boardId, boardId),
           eq(boardMembers.userId, targetUserId),
         ),
-      );
-  });
+      ),
+  ]);
 
   await recordActivity(userId, boardId, "board.member_removed", undefined, {
     removedUserId: targetUserId,

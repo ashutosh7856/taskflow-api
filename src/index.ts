@@ -12,7 +12,7 @@ import { publicPortal } from "./routes/portal";
 import { publicFiles } from "./routes/files";
 import { type FileBucket, useBucket } from "./services/storage";
 import { runWeeklyUpdates } from "./services/client-updates";
-import { withDatabase } from "./db";
+import { withDatabase, type D1Binding } from "./db";
 
 const app = new Hono<AppEnv>();
 const allowedOrigins = new Set(
@@ -47,9 +47,9 @@ app.use(
 );
 app.use("*", async (c, next) => {
   const env = c.env as
-    | { HYPERDRIVE?: { connectionString: string }; FILES?: FileBucket }
+    | { DB?: D1Binding; FILES?: FileBucket }
     | undefined;
-  useBucket(env?.FILES, Boolean(env?.HYPERDRIVE));
+  useBucket(env?.FILES, Boolean(env?.DB));
   let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
   try {
     const ctx = c.executionCtx;
@@ -58,7 +58,7 @@ app.use("*", async (c, next) => {
     // Not running on Workers (Bun dev server): use the shared pool.
   }
   return withDatabase(next, {
-    connectionString: env?.HYPERDRIVE?.connectionString,
+    d1: env?.DB,
     waitUntil,
   });
 });
@@ -79,7 +79,7 @@ app.onError((error, c) => {
       { error: error.message, details: error.details },
       error.status as any,
     );
-  // Drizzle wraps the real Postgres error in `cause`; log that, not the wrapper.
+  // Drizzle wraps the real database error in `cause`; log that, not the wrapper.
   const databaseError = ((error as Error & { cause?: unknown }).cause ||
     error) as Error & {
     code?: string;
@@ -107,7 +107,7 @@ app.onError((error, c) => {
 });
 
 type WorkerEnv = {
-  HYPERDRIVE?: { connectionString: string };
+  DB?: D1Binding;
   FILES?: FileBucket;
 };
 
@@ -122,7 +122,7 @@ export default {
     useBucket(env.FILES, true);
     ctx.waitUntil(
       withDatabase(() => runWeeklyUpdates(), {
-        connectionString: env.HYPERDRIVE?.connectionString,
+        d1: env.DB,
         waitUntil: ctx.waitUntil.bind(ctx),
       }),
     );

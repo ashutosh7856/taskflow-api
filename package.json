@@ -6,21 +6,22 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:migrate:local": "bun run scripts/migrate-local.ts",
+    "db:migrate:remote": "wrangler d1 migrations apply danto-db --remote"
   },
   "dependencies": {
     "@hono/swagger-ui": "^0.6.1",
+    "@libsql/client": "^0.18.0",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.8",
     "jsonwebtoken": "^9.0.3",
-    "postgres": "^3.4.9",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",
     "drizzle-kit": "^0.31.10",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "wrangler": "4.158.0"
   }
 }

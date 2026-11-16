@@ -670,15 +670,15 @@ portalAdmin.get("/me/onboarding", async (c) => {
   const userId = c.get("userId");
   const [owned] = await db
     .select({
-      boards: sql<number>`count(${boards.id})::int`,
-      clientBoards: sql<number>`count(*) filter (where ${boards.template} = 'client')::int`,
-      portals: sql<number>`count(*) filter (where ${boards.portalToken} is not null)::int`,
+      boards: sql<number>`count(${boards.id})`,
+      clientBoards: sql<number>`coalesce(sum(${boards.template} = 'client'), 0)`,
+      portals: sql<number>`coalesce(sum(${boards.portalToken} is not null), 0)`,
     })
     .from(boards)
     .innerJoin(workspaces, eq(boards.workspaceId, workspaces.id))
     .where(eq(workspaces.ownerId, userId));
   const [approvals] = await db
-    .select({ total: sql<number>`count(*)::int` })
+    .select({ total: sql<number>`count(*)` })
     .from(cards)
     .innerJoin(lists, eq(cards.listId, lists.id))
     .innerJoin(boards, eq(lists.boardId, boards.id))
@@ -687,7 +687,7 @@ portalAdmin.get("/me/onboarding", async (c) => {
       and(eq(workspaces.ownerId, userId), isNotNull(cards.approvalRequestedAt)),
     );
   const [clientActivity] = await db
-    .select({ total: sql<number>`count(*)::int` })
+    .select({ total: sql<number>`count(*)` })
     .from(clientFeedback)
     .innerJoin(boards, eq(clientFeedback.boardId, boards.id))
     .innerJoin(workspaces, eq(boards.workspaceId, workspaces.id))

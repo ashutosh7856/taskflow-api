@@ -1,51 +1,21 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
+import type { BatchItem } from "drizzle-orm/batch";
+import { drizzle as drizzleD1, type DrizzleD1Database } from "drizzle-orm/d1";
 import * as schema from "./schema";
-import { normalizeDatabaseUrl } from "./database-url";
 
-type ClientOptions = { connectionString?: string; pooled?: boolean };
+/**
+ * The database is Cloudflare D1 (SQLite). On Workers each request gets the
+ * `DB` binding. The Bun dev server and scripts use a local SQLite file
+ * through libSQL instead, which speaks the same SQL dialect.
+ *
+ * D1 has no interactive transactions: group writes that must succeed
+ * together with `db.batch([...])`.
+ */
+export type Database = DrizzleD1Database<typeof schema>;
 
-let queueWarned = false;
+/** Minimal shape of the Workers D1 binding (avoids a types dependency). */
+export type D1Binding = Parameters<typeof drizzleD1>[0];
 
-function createClient(options: ClientOptions = {}) {
-  return postgres(
-    normalizeDatabaseUrl(options.connectionString || process.env.DATABASE_URL),
-    {
-      // Prisma's pooler sends this NOTICE when every backend connection is
-      // busy. Report it once instead of printing an object per query.
-      onnotice: (notice) => {
-        if (/client being queued/i.test(notice.message ?? "")) {
-          if (queueWarned) return;
-          queueWarned = true;
-          console.warn(
-            "Database pooler is out of connections; queries are waiting. Use DATABASE_URL_UNPOOLED for long-running servers.",
-          );
-          return;
-        }
-        console.log("Postgres notice:", notice.message);
-      },
-      // A Worker request can open at most six simultaneous external
-      // connections, so per-request clients stay small. A long-lived server
-      // process shares one pool across requests instead.
-      max: Number(process.env.DATABASE_POOL_MAX) || (options.pooled ? 10 : 3),
-      connect_timeout: 10,
-      // A long-running server keeps connections warm: reconnecting costs a
-      // TCP + TLS + auth handshake (seconds on a distant database).
-      idle_timeout: options.pooled ? 300 : 20,
-      max_lifetime: 10 * 60,
-      // Skips the pg_type lookup postgres.js runs on every new connection:
-      // one fewer network round trip before the first query.
-      fetch_types: false,
-    },
-  );
-}
-
-function createDatabase(client: ReturnType<typeof createClient>) {
-  return drizzle(client, { schema });
-}
-
-type Database = ReturnType<typeof createDatabase>;
 type RequestScope = { database: Database; tasks: Promise<unknown>[] };
 const databaseContext = new AsyncLocalStorage<RequestScope>();
 
@@ -55,8 +25,8 @@ function activeDatabase() {
   return scope.database;
 }
 
-// Routes can retain the existing `db.query`, `db.insert`, and `db.transaction`
-// API while the actual client remains scoped to the current request.
+// Routes use `db.query`, `db.insert`, `db.batch` etc. while the actual client
+// stays scoped to the current request.
 export const db = new Proxy({} as Database, {
   get(_target, property) {
     const database = activeDatabase();
@@ -66,8 +36,8 @@ export const db = new Proxy({} as Database, {
 });
 
 /**
- * Runs work after the response is sent (emails, notifications). It keeps the
- * request's database client open until the work finishes.
+ * Runs work after the response is sent (emails, notifications). On Workers
+ * it is handed to waitUntil so the request isn't cut off.
  */
 export function defer(task: () => Promise<unknown>) {
   const scope = databaseContext.getStore();
@@ -84,37 +54,36 @@ export function defer(task: () => Promise<unknown>) {
   return promise;
 }
 
-type SharedPool = {
-  key: string;
-  client: ReturnType<typeof createClient>;
-  database: Database;
-};
-// Kept on globalThis so `bun --hot` reloads reuse the pool instead of opening
-// a fresh one on every save and leaking the old connections.
-const poolHolder = globalThis as typeof globalThis & {
-  __dantoDbPool?: SharedPool;
+// Kept on globalThis so `bun --hot` reloads reuse the same local client.
+const localHolder = globalThis as typeof globalThis & {
+  __dantoLocalDb?: { url: string; database: Database };
 };
 
-function sharedPool() {
-  // A server process already pools its own connections, so it talks to
-  // Postgres directly. Going through Prisma's pooler as well adds a second
-  // queue with fewer connections ("client being queued").
-  const connectionString =
-    process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
-  const key = `${connectionString}|${process.env.DATABASE_POOL_MAX ?? ""}`;
-  const existing = poolHolder.__dantoDbPool;
-  if (existing?.key === key) return existing;
-  if (existing) void existing.client.end({ timeout: 5 }).catch(() => {});
-  const client = createClient({ connectionString, pooled: true });
-  const pool = { key, client, database: createDatabase(client) };
-  poolHolder.__dantoDbPool = pool;
-  return pool;
+/** Local SQLite file used outside Workers (dev server, scripts, tests). */
+export async function localDatabase(
+  url = process.env.SQLITE_URL || "file:.data/danto.db",
+) {
+  const existing = localHolder.__dantoLocalDb;
+  if (existing?.url === url) return existing.database;
+  const { createClient } = await import("@libsql/client");
+  const { drizzle } = await import("drizzle-orm/libsql");
+  if (url.startsWith("file:") && !url.includes(":memory:")) {
+    const { mkdirSync } = await import("node:fs");
+    const { dirname } = await import("node:path");
+    mkdirSync(dirname(url.slice(5)), { recursive: true });
+  }
+  const client = createClient({ url });
+  await client.execute("PRAGMA foreign_keys = ON");
+  // libSQL and D1 expose the same Drizzle SQLite API (query, batch, ...).
+  const database = drizzle(client, { schema }) as unknown as Database;
+  localHolder.__dantoLocalDb = { url, database };
+  return database;
 }
 
 type DatabaseOptions = {
-  /** Cloudflare Hyperdrive connection string, when the binding exists. */
-  connectionString?: string;
-  /** Present on Workers: lets cleanup run after the response is sent. */
+  /** Cloudflare D1 binding, present on Workers. */
+  d1?: D1Binding;
+  /** Present on Workers: lets deferred work finish after the response. */
   waitUntil?: (promise: Promise<unknown>) => void;
 };
 
@@ -122,28 +91,28 @@ export async function withDatabase<T>(
   callback: () => Promise<T>,
   options: DatabaseOptions = {},
 ) {
-  // Long-running runtimes (Bun dev server, Node/Bun hosts) reuse one pool, so
-  // requests skip the TCP + TLS + auth handshake entirely.
-  if (!options.waitUntil) {
-    const scope: RequestScope = { database: sharedPool().database, tasks: [] };
-    return databaseContext.run(scope, callback);
-  }
-
-  // Workers cannot reuse sockets across requests. With Hyperdrive the socket
-  // is a cheap local hop to an already-warm pool.
-  const client = createClient({ connectionString: options.connectionString });
-  const scope: RequestScope = { database: createDatabase(client), tasks: [] };
+  const database = options.d1
+    ? drizzleD1(options.d1, { schema })
+    : await localDatabase();
+  const scope: RequestScope = { database, tasks: [] };
   try {
     return await databaseContext.run(scope, callback);
   } finally {
-    options.waitUntil(
-      Promise.allSettled(scope.tasks).then(() =>
-        client.end({ timeout: 5 }).catch((error) => {
-          console.error("Failed to close database connection", {
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }),
-      ),
-    );
+    if (options.waitUntil && scope.tasks.length)
+      options.waitUntil(Promise.allSettled(scope.tasks));
   }
+}
+
+/** Runs a callback with an explicit database (tests and one-off scripts). */
+export function runWithDatabase<T>(database: Database, callback: () => T) {
+  return databaseContext.run({ database, tasks: [] }, callback);
+}
+
+/**
+ * Runs a dynamic list of write statements atomically (D1's replacement for
+ * a transaction). Use `db.batch([...])` directly when results are needed.
+ */
+export async function atomic(statements: BatchItem<"sqlite">[]) {
+  if (!statements.length) return;
+  await db.batch(statements as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
 }

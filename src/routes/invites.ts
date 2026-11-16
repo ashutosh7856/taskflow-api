@@ -2,7 +2,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 
-import { db } from "../db";
+import { atomic, db } from "../db";
 import {
   boardMembers,
   boards,
@@ -115,59 +115,61 @@ invitesRouter.post("/invites/:token/accept", async (c) => {
     throw new HttpError(403, "Invite belongs to another email");
   }
 
-  await db.transaction(async (tx) => {
-    const inviteWorkspaceId =
-      invite.scope === "workspace"
-        ? invite.workspaceId
-        : invite.boardId
-          ? await boardWorkspace(invite.boardId)
-          : null;
-    if (inviteWorkspaceId) {
-      const existing = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, inviteWorkspaceId),
-          eq(workspaceMembers.userId, user.id),
-        ),
-      });
-      if (!existing)
-        await assertWorkspaceSeatAvailable(inviteWorkspaceId, user.id);
-    }
-    if (invite.scope === "workspace" && invite.workspaceId) {
-      await tx
-        .insert(workspaceMembers)
-        .values({
-          workspaceId: invite.workspaceId,
-          userId: user.id,
-          role: invite.role,
-        })
-        .onConflictDoNothing();
-    }
-
-    if (invite.scope === "board" && invite.boardId) {
-      const workspaceId = await boardWorkspace(invite.boardId);
-      await tx
-        .insert(workspaceMembers)
-        .values({
-          workspaceId,
-          userId: user.id,
-          role: "member",
-        })
-        .onConflictDoNothing();
-      await tx
-        .insert(boardMembers)
-        .values({
-          boardId: invite.boardId,
-          userId: user.id,
-          role: invite.role,
-        })
-        .onConflictDoNothing();
-    }
-
-    await tx
+  const inviteWorkspaceId =
+    invite.scope === "workspace"
+      ? invite.workspaceId
+      : invite.boardId
+        ? await boardWorkspace(invite.boardId)
+        : null;
+  if (inviteWorkspaceId) {
+    const existing = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.workspaceId, inviteWorkspaceId),
+        eq(workspaceMembers.userId, user.id),
+      ),
+    });
+    if (!existing)
+      await assertWorkspaceSeatAvailable(inviteWorkspaceId, user.id);
+  }
+  const memberships =
+    invite.scope === "workspace" && invite.workspaceId
+      ? [
+          db
+            .insert(workspaceMembers)
+            .values({
+              workspaceId: invite.workspaceId,
+              userId: user.id,
+              role: invite.role,
+            })
+            .onConflictDoNothing(),
+        ]
+      : invite.scope === "board" && invite.boardId && inviteWorkspaceId
+        ? [
+            db
+              .insert(workspaceMembers)
+              .values({
+                workspaceId: inviteWorkspaceId,
+                userId: user.id,
+                role: "member",
+              })
+              .onConflictDoNothing(),
+            db
+              .insert(boardMembers)
+              .values({
+                boardId: invite.boardId,
+                userId: user.id,
+                role: invite.role,
+              })
+              .onConflictDoNothing(),
+          ]
+        : [];
+  await atomic([
+    ...memberships,
+    db
       .update(invites)
       .set({ acceptedAt: new Date() })
-      .where(eq(invites.id, invite.id));
-  });
+      .where(eq(invites.id, invite.id)),
+  ]);
 
   return c.json({ accepted: true, scope: invite.scope });
 });

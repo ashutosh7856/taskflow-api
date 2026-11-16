@@ -2,7 +2,7 @@ import { asc, eq, max } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 
-import { db } from "../db";
+import { atomic, db } from "../db";
 import { boards, cards, lists, workspaces } from "../db/schema";
 import { boardAccess, workspaceAccess } from "../lib/access";
 import { body, HttpError, type AppEnv } from "../lib/http";
@@ -220,33 +220,41 @@ aiRouter.post("/boards/:id/ai/apply", async (c) => {
     .from(lists)
     .where(eq(lists.boardId, boardId));
   let nextListPosition = Number(highestPosition ?? -1) + 1;
-  const created = await db.transaction(async (tx) => {
-    let cardCount = 0;
-    for (const group of plan.lists) {
-      const [list] = await tx
-        .insert(lists)
-        .values({ boardId, name: group.name, position: nextListPosition++ })
-        .returning();
-      if (group.tasks.length) {
-        await tx.insert(cards).values(
-          group.tasks.map((task, position) => ({
-            listId: list.id,
-            title: task.title,
-            description: task.description,
-            priority: task.priority,
-            category: task.category,
-            position,
-            createdBy: userId,
-            dueDate: task.dueOffsetDays
-              ? new Date(Date.now() + task.dueOffsetDays * 86400000)
-              : null,
-          })),
-        );
-      }
-      cardCount += group.tasks.length;
-    }
-    return { lists: plan.lists.length, cards: cardCount };
+  // One row per statement keeps each under D1's 100 bound-parameter limit;
+  // the batch commits the whole plan or nothing.
+  const statements = plan.lists.flatMap((group) => {
+    const listId = crypto.randomUUID();
+    return [
+      db.insert(lists).values({
+        id: listId,
+        boardId,
+        name: group.name,
+        position: nextListPosition++,
+      }),
+      ...group.tasks.map((task, position) =>
+        db.insert(cards).values({
+          listId,
+          title: task.title,
+          description: task.description,
+          priority: task.priority,
+          category: task.category,
+          position,
+          createdBy: userId,
+          dueDate: task.dueOffsetDays
+            ? new Date(Date.now() + task.dueOffsetDays * 86400000)
+            : null,
+        }),
+      ),
+    ];
   });
+  if (statements.length)
+    await db.batch(
+      statements as [(typeof statements)[0], ...typeof statements],
+    );
+  const created = {
+    lists: plan.lists.length,
+    cards: plan.lists.reduce((total, group) => total + group.tasks.length, 0),
+  };
   await recordActivity(userId, boardId, "ai.plan_applied", undefined, created);
   return c.json(created, 201);
 });
