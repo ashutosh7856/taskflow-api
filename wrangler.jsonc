@@ -28,7 +28,9 @@
   "triggers": { "crons": ["0 9 * * 5"] },
   "upload_source_maps": true,
   "vars": {
-    "FRONTEND_URL": "https://danto.app",
+    // Links in emails. Switch to https://danto.app once the domain is live;
+    // both addresses keep working either way.
+    "FRONTEND_URL": "https://taskflow-ui-b5u.pages.dev",
     "CORS_ORIGINS": "https://danto.app,https://www.danto.app,https://taskflow-ui-b5u.pages.dev",
     "OPENAI_MODEL": "gpt-4o-mini",
     "OPENAI_FALLBACK_MODEL": "gpt-6.1-sol",

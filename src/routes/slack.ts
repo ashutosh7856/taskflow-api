@@ -8,6 +8,7 @@ import { workspaces } from "../db/schema";
 import { workspaceAccess } from "../lib/access";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { jwtSecret } from "../middleware/auth";
+import { isAllowedOrigin } from "../lib/origins";
 import { frontendUrl } from "../services/email";
 import { ownerPlan, planCatalog } from "../services/entitlements";
 import {
@@ -77,6 +78,10 @@ slackRouter.post("/workspaces/:id/slack/connect", async (c) => {
       purpose: "slack",
       workspaceId,
       userId: c.get("userId"),
+      // Send them back to the address they started from (Pages or domain).
+      returnTo: isAllowedOrigin(c.req.header("Origin"))
+        ? c.req.header("Origin")
+        : undefined,
       exp: Math.floor(Date.now() / 1000) + 600,
     },
     jwtSecret(),
@@ -175,20 +180,34 @@ slackRouter.delete("/workspaces/:id/slack", async (c) => {
 export const slackCallback = new Hono<AppEnv>();
 
 slackCallback.get("/callback", async (c) => {
-  const back = (result: string) =>
-    c.redirect(frontendUrl(`/app?slack=${result}`));
   const code = c.req.query("code");
   const state = c.req.query("state");
-  if (c.req.query("error") || !code || !state) return back("cancelled");
-
-  let payload: { purpose?: string; workspaceId?: string; userId?: string };
-  try {
-    payload = (await verify(state, jwtSecret(), "HS256")) as typeof payload;
-  } catch {
-    return back("expired");
+  // Read the signed state first: it says where to send the person back to,
+  // even when they cancelled on Slack's page.
+  let payload: {
+    purpose?: string;
+    workspaceId?: string;
+    userId?: string;
+    returnTo?: string;
+  } = {};
+  let validState = false;
+  if (state) {
+    try {
+      payload = (await verify(state, jwtSecret(), "HS256")) as typeof payload;
+      validState = payload.purpose === "slack";
+    } catch {
+      /* expired or forged */
+    }
   }
-  if (payload.purpose !== "slack" || !payload.workspaceId || !payload.userId)
-    return back("error");
+  const back = (result: string) =>
+    c.redirect(
+      validState && isAllowedOrigin(payload.returnTo)
+        ? `${payload.returnTo!.replace(/\/$/, "")}/app?slack=${result}`
+        : frontendUrl(`/app?slack=${result}`),
+    );
+  if (c.req.query("error")) return back("cancelled");
+  if (!state || !validState) return back("expired");
+  if (!code || !payload.workspaceId || !payload.userId) return back("error");
   try {
     await workspaceAccess(payload.userId, payload.workspaceId, true);
   } catch {

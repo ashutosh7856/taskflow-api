@@ -11,25 +11,13 @@ import { paypalWebhook } from "./routes/billing";
 import { publicPortal } from "./routes/portal";
 import { publicFiles } from "./routes/files";
 import { slackCallback } from "./routes/slack";
+import { isAllowedOrigin } from "./lib/origins";
 import { type FileBucket, useBucket } from "./services/storage";
 import { runWeeklyUpdates } from "./services/client-updates";
 import { withDatabase, type D1Binding } from "./db";
 import { templates } from "./lib/templates";
 
 const app = new Hono<AppEnv>();
-const allowedOrigins = new Set(
-  [
-    "https://taskflow-ui-b5u.pages.dev",
-    "https://danto.app",
-    "https://www.danto.app",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    process.env.FRONTEND_URL,
-    ...(process.env.CORS_ORIGINS || "").split(","),
-  ]
-    .filter((origin): origin is string => Boolean(origin?.trim()))
-    .map((origin) => origin.trim().replace(/\/$/, "")),
-);
 const secure = secureHeaders();
 app.use(
   "*",
@@ -38,8 +26,7 @@ app.use(
   // <img>/<video> from the web app's origin.
   (c, next) => (c.req.path.startsWith("/files/") ? next() : secure(c, next)),
   cors({
-    origin: (origin) =>
-      allowedOrigins.has(origin.replace(/\/$/, "")) ? origin : null,
+    origin: (origin) => (isAllowedOrigin(origin) ? origin : null),
     allowMethods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type"],
     exposeHeaders: ["Content-Length"],
