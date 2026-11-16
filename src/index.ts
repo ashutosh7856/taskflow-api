@@ -10,6 +10,7 @@ import { openApi } from "./openapi";
 import { paypalWebhook } from "./routes/billing";
 import { publicPortal } from "./routes/portal";
 import { publicFiles } from "./routes/files";
+import { slackCallback } from "./routes/slack";
 import { type FileBucket, useBucket } from "./services/storage";
 import { runWeeklyUpdates } from "./services/client-updates";
 import { withDatabase, type D1Binding } from "./db";
@@ -75,6 +76,7 @@ app.route("/auth", authRoutes);
 app.route("/webhooks", paypalWebhook);
 app.route("/portal", publicPortal);
 app.route("/files", publicFiles);
+app.route("/slack", slackCallback);
 app.route("/", apiRoutes);
 app.notFound((c) => c.json({ error: "Route not found" }, 404));
 app.onError((error, c) => {

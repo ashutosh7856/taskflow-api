@@ -64,6 +64,8 @@ workspacesRouter.get("/workspaces/:id", async (c) => {
 
   const workspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.id, workspaceId),
+    // The Slack webhook is a secret; GET /workspaces/:id/slack has the status.
+    columns: { slackWebhookUrl: false },
     with: {
       members: {
         with: { user: { columns: { passwordHash: false } } },
@@ -86,7 +88,8 @@ workspacesRouter.patch("/workspaces/:id", async (c) => {
     .where(eq(workspaces.id, workspaceId))
     .returning();
 
-  return c.json(workspace);
+  const { slackWebhookUrl: _secret, ...visible } = workspace;
+  return c.json(visible);
 });
 
 workspacesRouter.delete("/workspaces/:id", async (c) => {

@@ -32,6 +32,8 @@ type PlanEntitlements = {
   maxFileMb: number;
   /** AI writes and emails the client update every Friday. */
   weeklyUpdates: boolean;
+  /** Post board events to a Slack channel. */
+  slack: boolean;
 };
 
 export const planCatalog: Record<Plan, PlanEntitlements> = {
@@ -52,6 +54,7 @@ export const planCatalog: Record<Plan, PlanEntitlements> = {
     storageMb: 250,
     maxFileMb: 10,
     weeklyUpdates: false,
+    slack: false,
   },
   pro: {
     priceUsd: 19,
@@ -70,6 +73,7 @@ export const planCatalog: Record<Plan, PlanEntitlements> = {
     storageMb: 10 * 1024,
     maxFileMb: 50,
     weeklyUpdates: true,
+    slack: true,
   },
   business: {
     priceUsd: 49,
@@ -88,6 +92,7 @@ export const planCatalog: Record<Plan, PlanEntitlements> = {
     storageMb: 50 * 1024,
     maxFileMb: 95,
     weeklyUpdates: true,
+    slack: true,
   },
 };
 

@@ -7,6 +7,7 @@ import { comments } from "../db/schema";
 import { cardBoard } from "../lib/access";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { recordActivity } from "../services/activity";
+import { notifySlack } from "../services/slack";
 
 const commentsRouter = new Hono<AppEnv>();
 
@@ -35,6 +36,14 @@ commentsRouter.post("/cards/:cardId/comments", async (c) => {
 
   await recordActivity(userId, boardId, "comment.created", cardId, {
     commentId: comment.id,
+  });
+  notifySlack({
+    boardId,
+    event: "comments",
+    actorId: userId,
+    verb: "commented on",
+    cardId,
+    quote: input.content,
   });
   return c.json(comment, 201);
 });

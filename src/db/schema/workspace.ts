@@ -51,6 +51,12 @@ export const workspaces = sqliteTable(
     brandName: text("brand_name"),
     brandColor: text("brand_color"),
     brandLogoUrl: text("brand_logo_url"),
+    /** Slack incoming webhook (a secret; never sent to the browser). */
+    slackWebhookUrl: text("slack_webhook_url"),
+    slackChannel: text("slack_channel"),
+    slackTeam: text("slack_team"),
+    /** Which events post to Slack; null means the defaults. */
+    slackEvents: text("slack_events", { mode: "json" }).$type<string[]>(),
     ownerId: uuidRef("owner_id")
       .references(() => users.id, { onDelete: "restrict" })
       .notNull(),

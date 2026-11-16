@@ -16,6 +16,7 @@ import { body, HttpError, type AppEnv } from "../lib/http";
 import { cachedEdgeJson, invalidateEdge } from "../lib/cache";
 import { clientFields, getTemplate } from "../lib/templates";
 import { recordActivity } from "../services/activity";
+import { notifySlack } from "../services/slack";
 import { portalFiles } from "./files";
 import {
   deliverClientUpdate,
@@ -324,6 +325,20 @@ publicPortal.post("/:token/cards/:cardId/respond", async (c) => {
     cardId,
     { authorName: input.authorName },
   );
+  notifySlack({
+    boardId: board.id,
+    event: "client",
+    actorName: `${input.authorName} (client)`,
+    verb:
+      input.kind === "approved"
+        ? "approved ✅"
+        : input.kind === "changes_requested"
+          ? "requested changes on ✏️"
+          : "commented on",
+    cardId,
+    cardTitle: card.title,
+    quote: input.message || undefined,
+  });
   const verb =
     input.kind === "approved"
       ? "approved"
@@ -394,6 +409,15 @@ publicPortal.post("/:token/requests", async (c) => {
     card.id,
     { authorName: input.authorName },
   );
+  notifySlack({
+    boardId: board.id,
+    event: "client",
+    actorName: `${input.authorName} (client)`,
+    verb: "sent a new request:",
+    cardId: card.id,
+    cardTitle: input.title,
+    quote: input.details || undefined,
+  });
   defer(() =>
     notifyOwner(
       board,
@@ -577,6 +601,15 @@ portalAdmin.post("/cards/:id/approval", async (c) => {
     .where(eq(cards.id, cardId))
     .returning();
   await recordActivity(userId, boardId, `approval.${action}`, cardId);
+  if (action === "request" && card)
+    notifySlack({
+      boardId,
+      event: "client",
+      actorId: userId,
+      verb: "sent for client approval:",
+      cardId,
+      cardTitle: card.title,
+    });
   const [portal] = await db
     .select({ token: boards.portalToken })
     .from(boards)

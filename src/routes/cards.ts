@@ -20,6 +20,7 @@ import { purgeFiles } from "../services/storage";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { recordActivity } from "../services/activity";
 import { frontendUrl, sendEmail } from "../services/email";
+import { notifySlack, slackEscape } from "../services/slack";
 
 const cardsRouter = new Hono<AppEnv>();
 
@@ -61,7 +62,7 @@ async function boardContext(boardId: string) {
     db.query.lists.findMany({
       where: eq(lists.boardId, boardId),
       orderBy: asc(lists.position),
-      columns: { id: true, role: true },
+      columns: { id: true, name: true, role: true },
     }),
   ]);
   return { template: getTemplate(board?.template), lists: boardLists };
@@ -242,6 +243,18 @@ cardsRouter.patch("/cards/:id", async (c) => {
     .returning();
 
   await recordActivity(userId, currentBoardId, "card.updated", cardId, input);
+  if (completionChanged && card.isCompleted) {
+    const list = context?.lists.find((item) => item.id === card.listId);
+    const doneName = list?.role === "done" ? list.name : null;
+    notifySlack({
+      boardId: currentBoardId,
+      event: "done",
+      actorId: userId,
+      verb: doneName ? `moved to *${slackEscape(doneName)}*:` : "finished",
+      cardId,
+      cardTitle: card.title,
+    });
+  }
   return c.json(card);
 });
 
@@ -297,6 +310,18 @@ cardsRouter.post("/cards/:id/members", async (c) => {
   await recordActivity(c.get("userId"), boardId, "card.member_added", cardId, {
     assignedUserId: userId,
   });
+  if (targetUser && card)
+    notifySlack({
+      boardId,
+      event: "assigned",
+      actorId: c.get("userId"),
+      verb:
+        userId === c.get("userId")
+          ? "took"
+          : `assigned *${slackEscape(targetUser.name)}* to`,
+      cardId,
+      cardTitle: card.title,
+    });
 
   return c.json({ cardId, userId, emailSent: email.sent }, 201);
 });
