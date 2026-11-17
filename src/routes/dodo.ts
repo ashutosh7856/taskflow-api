@@ -22,7 +22,7 @@ import {
   type PaidPlan,
 } from "../services/dodo";
 import { frontendUrl, sendEmail } from "../services/email";
-import { invalidatePlan } from "../services/entitlements";
+import { invalidatePlan, planCatalog } from "../services/entitlements";
 
 const dodoRouter = new Hono<AppEnv>();
 const planNames = { pro: "Pro", business: "Team" } as const;
@@ -326,6 +326,12 @@ export async function applySubscription(
   if (!account) return;
   const name = planNames[product.plan];
   const firstCharge = sub.trial_period_days > 0 && periodEnd;
+  const price =
+    product.interval === "year"
+      ? planCatalog[product.plan].yearlyPriceUsd
+      : planCatalog[product.plan].priceUsd;
+  const amount = `$${price.toFixed(2)} USD`;
+  const every = product.interval === "year" ? "every year" : "every month";
   defer(() =>
     sendEmail({
       to: account.email,
@@ -333,11 +339,11 @@ export async function applySubscription(
       eyebrow: "Subscription active",
       title: `Welcome to ${name}`,
       message: firstCharge
-        ? `Your ${name} plan is active. Nothing was charged today: your first payment is on ${longDate(periodEnd)}, when your trial ends. Cancel before then and you won't be charged.`
+        ? `Your ${name} plan is active. Nothing was charged today. Your first payment of ${amount} (plus any sales tax) is on ${longDate(periodEnd)}, when your trial ends, then ${amount} ${every} until you cancel. Cancel before ${longDate(periodEnd)} and you won't be charged at all.`
         : `Your ${name} plan is active. Unlimited client portals, your branding and AI client updates are switched on. Dodo Payments emails an invoice for every payment.`,
       details: [
         ["Plan", name],
-        ["Billing", product.interval === "year" ? "Yearly" : "Monthly"],
+        ["Billing", `${amount} ${every}`],
         ...(periodEnd
           ? ([
               [firstCharge ? "First payment" : "Next payment", longDate(periodEnd)],
