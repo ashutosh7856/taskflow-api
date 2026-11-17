@@ -28,13 +28,18 @@
   "triggers": { "crons": ["0 9 * * 5"] },
   "upload_source_maps": true,
   "vars": {
-    // Links in emails. Switch to https://danto.app once the domain is live;
+    // Links in emails (domain live since 2026-11-17);
     // both addresses keep working either way.
-    "FRONTEND_URL": "https://taskflow-ui-b5u.pages.dev",
+    "FRONTEND_URL": "https://danto.app",
     "CORS_ORIGINS": "https://danto.app,https://www.danto.app,https://taskflow-ui-b5u.pages.dev",
     "OPENAI_MODEL": "gpt-4o-mini",
     "OPENAI_FALLBACK_MODEL": "gpt-6.1-sol",
     "PAYPAL_ENV": "sandbox",
+    // Dodo Payments (src/services/dodo.ts). DODO_API_KEY and
+    // DODO_WEBHOOK_SECRET are wrangler secrets. Test and live product ids
+    // differ: swap both DODO_ENV and DODO_PRODUCTS at go-live.
+    "DODO_ENV": "test",
+    "DODO_PRODUCTS": "{\"pro_month\":\"pdt_0Ns8isUYLROIB7cCyCVca\",\"pro_year\":\"pdt_0Ns8isXx5GT4su4bXuG3H\",\"business_month\":\"pdt_0Ns8iscKKINroIzRnFZvq\",\"business_year\":\"pdt_0Ns8isfNxTIDCP7oO2B1E\"}",
     // Public OAuth client id; SLACK_CLIENT_SECRET is a wrangler secret.
     "SLACK_CLIENT_ID": "12649265083264.12614722884051"
   },

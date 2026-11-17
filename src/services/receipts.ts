@@ -66,7 +66,7 @@ export async function receiptDetails(paymentId: string, userId?: string) {
     currency: payment.currency,
     plan: planNames[payment.plan || ""] || "Subscription",
     interval,
-    paymentMethod: "PayPal",
+    paymentMethod: payment.provider === "dodo" ? "Dodo Payments" : "PayPal",
     reference: payment.providerEventId,
     subscriptionId: payment.providerSubscriptionId,
     customer: { name: customer.name, email: customer.email },
@@ -86,12 +86,12 @@ export async function sendReceipt(paymentId: string) {
       ? `Refund processed: ${amount} (${receipt.number})`
       : `Your Danto receipt ${receipt.number}`,
     preheader: refunded
-      ? `We refunded ${amount} to your PayPal account.`
+      ? `We refunded ${amount} to your original payment method.`
       : `Payment of ${amount} received for Danto ${receipt.plan}. Thank you!`,
     eyebrow: refunded ? "Refund" : "Receipt",
     title: refunded ? "Your refund is on its way" : "Thanks for your payment",
     message: refunded
-      ? `We refunded ${amount} for your Danto ${receipt.plan} plan. PayPal usually shows it within a few business days.`
+      ? `We refunded ${amount} for your Danto ${receipt.plan} plan. It usually shows up within a few business days.`
       : `We received your payment for Danto ${receipt.plan}. Keep this email for your records. You can also download a printable receipt anytime from your billing page.`,
     details: [
       ["Receipt number", receipt.number],

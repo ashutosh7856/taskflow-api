@@ -20,6 +20,8 @@ import {
   paypalRequest,
 } from "../services/paypal";
 import { frontendUrl, sendEmail } from "../services/email";
+import { dodoConfigured } from "../services/dodo";
+import { cancelDodoRenewal, deferredDays } from "./dodo";
 import {
   claimUnlinkedPayments,
   receiptDetails,
@@ -87,6 +89,25 @@ billingRouter.get("/billing", async (c) => {
     aiRequestsThisMonth: subscription.aiRequestsThisMonth,
     aiPeriodStart: subscription.aiPeriodStart,
     paypalSubscriptionId: subscription.paypalSubscriptionId,
+    // Whichever provider bills this account (Dodo preferred).
+    subscriptionId:
+      subscription.dodoSubscriptionId || subscription.paypalSubscriptionId,
+    provider: subscription.dodoSubscriptionId
+      ? "dodo"
+      : subscription.paypalSubscriptionId
+        ? "paypal"
+        : null,
+    canManagePayment: Boolean(subscription.dodoCustomerId),
+    // Days until the first charge if this account checked out now (trial).
+    deferredDays: {
+      pro: deferredDays(subscription, "pro"),
+      business: deferredDays(subscription, "business"),
+    },
+    checkout: {
+      provider: "dodo",
+      configured: dodoConfigured(),
+      environment: process.env.DODO_ENV === "live" ? "live" : "test",
+    },
     billingInterval: subscription.billingInterval,
     entitlements: planCatalog[plan],
     storage: {
@@ -535,6 +556,10 @@ billingRouter.get("/billing/receipts/:id", async (c) => {
 billingRouter.post("/billing/cancel", async (c) => {
   const userId = c.get("userId");
   const subscription = await accountSubscription(userId);
+  if (subscription.dodoSubscriptionId) {
+    await cancelDodoRenewal(subscription);
+    return c.json({ cancelled: true });
+  }
   if (!subscription.paypalSubscriptionId)
     throw new HttpError(409, "No active subscription found");
   await paypalRequest(

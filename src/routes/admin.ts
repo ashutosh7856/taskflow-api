@@ -112,7 +112,7 @@ async function overviewData() {
         plan: subscriptions.plan,
         status: subscriptions.billingStatus,
         currentPeriodEnd: subscriptions.currentPeriodEnd,
-        paypal: subscriptions.paypalSubscriptionId,
+        paypal: sql<string | null>`coalesce(${subscriptions.dodoSubscriptionId}, ${subscriptions.paypalSubscriptionId})`,
         interval: subscriptions.billingInterval,
       })
       .from(subscriptions)
@@ -182,7 +182,10 @@ async function overviewData() {
         and(
           eq(subscriptions.billingStatus, "cancelled"),
           // Comps are stored as cancelled-with-end-date; only count real ones.
-          isNotNull(subscriptions.paypalSubscriptionId),
+          or(
+            isNotNull(subscriptions.dodoSubscriptionId),
+            isNotNull(subscriptions.paypalSubscriptionId),
+          ),
           gte(subscriptions.updatedAt, d30),
         ),
       ),
@@ -220,7 +223,7 @@ async function overviewData() {
       createdAt: users.createdAt,
       plan: subscriptions.plan,
       status: subscriptions.billingStatus,
-      paypal: subscriptions.paypalSubscriptionId,
+      paypal: sql<string | null>`coalesce(${subscriptions.dodoSubscriptionId}, ${subscriptions.paypalSubscriptionId})`,
       currentPeriodEnd: subscriptions.currentPeriodEnd,
     })
     .from(users)
@@ -383,7 +386,7 @@ adminRouter.get("/admin/users", async (c) => {
         plan: subscriptions.plan,
         billingStatus: subscriptions.billingStatus,
         currentPeriodEnd: subscriptions.currentPeriodEnd,
-        paypalSubscriptionId: subscriptions.paypalSubscriptionId,
+        paypalSubscriptionId: sql<string | null>`coalesce(${subscriptions.dodoSubscriptionId}, ${subscriptions.paypalSubscriptionId})`,
         aiRequestsThisMonth: subscriptions.aiRequestsThisMonth,
       })
       .from(users)
@@ -550,10 +553,13 @@ adminRouter.post("/admin/users/:id/plan", async (c) => {
   const existing = await db.query.subscriptions.findFirst({
     where: eq(subscriptions.userId, userId),
   });
-  if (existing?.paypalSubscriptionId && existing.billingStatus === "active")
+  if (
+    (existing?.dodoSubscriptionId || existing?.paypalSubscriptionId) &&
+    existing.billingStatus === "active"
+  )
     throw new HttpError(
       409,
-      "This user has an active PayPal subscription. Cancel it in PayPal first, or they'll keep being billed.",
+      "This user has an active paid subscription. Cancel it first, or they'll keep being billed.",
     );
   const values =
     input.plan === "free"
@@ -717,7 +723,7 @@ adminRouter.get("/admin/export/users.csv", async (c) => {
       plan: subscriptions.plan,
       status: subscriptions.billingStatus,
       interval: subscriptions.billingInterval,
-      paypal: subscriptions.paypalSubscriptionId,
+      paypal: sql<string | null>`coalesce(${subscriptions.dodoSubscriptionId}, ${subscriptions.paypalSubscriptionId})`,
       currentPeriodEnd: subscriptions.currentPeriodEnd,
     })
     .from(users)

@@ -76,6 +76,8 @@ export const subscriptions = sqliteTable("subscriptions", {
     .default("inactive")
     .notNull(),
   paypalSubscriptionId: text("paypal_subscription_id").unique(),
+  dodoSubscriptionId: text("dodo_subscription_id").unique(),
+  dodoCustomerId: text("dodo_customer_id"),
   billingInterval: billingIntervalEnum("billing_interval")
     .default("month")
     .notNull(),
@@ -127,6 +129,8 @@ export const discountCodes = sqliteTable(
     expiresAt: timestamp("expires_at"),
     paypalProPlanId: text("paypal_pro_plan_id").unique(),
     paypalBusinessPlanId: text("paypal_business_plan_id").unique(),
+    /** Matching Dodo discount, created on first checkout that uses the code. */
+    dodoDiscountId: text("dodo_discount_id"),
     createdAt: timestamp("created_at")
       .$defaultFn(() => new Date())
       .notNull(),
