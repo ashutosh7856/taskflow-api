@@ -98,9 +98,23 @@ export type DodoSubscription = {
   next_billing_date: string;
   cancel_at_next_billing_date: boolean;
   trial_period_days: number;
+  created_at: string;
+  previous_billing_date?: string | null;
   customer: { customer_id: string; email: string };
   metadata: Record<string, string>;
 };
+
+/** When a subscription's free trial ends, or null if it isn't in one. */
+export function subscriptionTrialEnd(sub: DodoSubscription, now = new Date()) {
+  if (!sub.trial_period_days || !sub.created_at) return null;
+  const end = new Date(
+    new Date(sub.created_at).getTime() + sub.trial_period_days * 86_400_000,
+  );
+  return end > now ? end : null;
+}
+
+/** Grace period after a failed renewal before access drops to Free. */
+export const PAYMENT_GRACE_DAYS = 3;
 
 /** Whole days left until `end` (rounded up), 0 if it has passed. */
 export function trialDaysLeft(end: Date | null | undefined, now = new Date()) {

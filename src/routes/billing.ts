@@ -11,7 +11,7 @@ import {
 } from "../db/schema";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { dodoConfigured } from "../services/dodo";
-import { cancelDodoRenewal, deferredDays } from "./dodo";
+import { cancelDodoRenewal, checkoutDeferredDays } from "./dodo";
 import { receiptDetails, receiptNumber } from "../services/receipts";
 import { effectivePlan, planCatalog } from "../services/entitlements";
 
@@ -70,8 +70,8 @@ billingRouter.get("/billing", async (c) => {
     canManagePayment: Boolean(subscription.dodoCustomerId),
     // Days until the first charge if this account checked out now (trial).
     deferredDays: {
-      pro: deferredDays(subscription, "pro"),
-      business: deferredDays(subscription, "business"),
+      pro: await checkoutDeferredDays(subscription, "pro"),
+      business: await checkoutDeferredDays(subscription, "business"),
     },
     checkout: {
       provider: "dodo",

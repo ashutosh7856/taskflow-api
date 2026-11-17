@@ -54,8 +54,11 @@ export async function cachedEdgeJson<T>(
   load: () => Promise<T>,
   waitUntil?: (promise: Promise<unknown>) => void,
 ): Promise<T> {
-  return cached(`edge:${key}`, ttlSeconds, async () => {
-    const cache = edgeCache();
+  const cache = edgeCache();
+  // With a shared edge cache, skip the per-isolate memory layer: another
+  // isolate can't see invalidateEdge() clearing its memory, and would keep
+  // serving the old copy (e.g. an approval still "waiting") for the TTL.
+  const read = async () => {
     const request = new Request(`${EDGE_ORIGIN}/${encodeURIComponent(key)}`);
     if (cache) {
       const match = await cache.match(request).catch(() => undefined);
@@ -78,7 +81,8 @@ export async function cachedEdgeJson<T>(
       else await put;
     }
     return value;
-  });
+  };
+  return cache ? read() : cached(`edge:${key}`, ttlSeconds, read);
 }
 
 export async function invalidateEdge(key: string) {

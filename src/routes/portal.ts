@@ -271,7 +271,6 @@ publicPortal.get("/:token", async (c) => {
 publicPortal.post("/:token/cards/:cardId/respond", async (c) => {
   rateLimit(c, "portal-respond");
   const board = await portalBoard(c.req.param("token"));
-  defer(() => invalidateEdge(`portal:${board.portalToken}`));
   const cardId = c.req.param("cardId");
   const input = await body(
     c,
@@ -297,6 +296,29 @@ publicPortal.post("/:token/cards/:cardId/respond", async (c) => {
     .limit(1);
   if (!card) throw new HttpError(404, "Item not found");
 
+  if (input.kind !== "comment") {
+    // Only an item waiting for review can be approved or sent back, and only
+    // once: the conditional update makes a double click (or two tabs) a
+    // no-op instead of duplicate approvals and emails.
+    const answered = await db
+      .update(cards)
+      .set({
+        approvalStatus: input.kind,
+        approvalRespondedAt: new Date(),
+        ...(await nextStage(board.id, card.listId, input.kind)),
+        updatedAt: new Date(),
+      })
+      .where(and(eq(cards.id, cardId), eq(cards.approvalStatus, "pending")))
+      .returning({ id: cards.id });
+    if (!answered.length) {
+      await invalidateEdge(`portal:${board.portalToken}`);
+      throw new HttpError(
+        409,
+        "This item isn't waiting for your review any more. Refresh to see the latest status.",
+      );
+    }
+  }
+
   const [entry] = await db
     .insert(clientFeedback)
     .values({
@@ -307,17 +329,9 @@ publicPortal.post("/:token/cards/:cardId/respond", async (c) => {
       message: input.message || "Approved",
     })
     .returning();
-  if (input.kind !== "comment") {
-    await db
-      .update(cards)
-      .set({
-        approvalStatus: input.kind,
-        approvalRespondedAt: new Date(),
-        ...(await nextStage(board.id, card.listId, input.kind)),
-        updatedAt: new Date(),
-      })
-      .where(eq(cards.id, cardId));
-  }
+  // Clear the cached portal only now that the change is saved, so the
+  // client's refresh can't pick up the old status again.
+  await invalidateEdge(`portal:${board.portalToken}`);
   await recordActivity(
     board.workspace.ownerId,
     board.id,
@@ -360,7 +374,6 @@ publicPortal.post("/:token/cards/:cardId/respond", async (c) => {
 publicPortal.post("/:token/requests", async (c) => {
   rateLimit(c, "portal-request", 10);
   const board = await portalBoard(c.req.param("token"));
-  defer(() => invalidateEdge(`portal:${board.portalToken}`));
   if (!board.portalAllowRequests)
     throw new HttpError(403, "Requests are turned off for this portal");
   const input = await body(
@@ -402,6 +415,7 @@ publicPortal.post("/:token/requests", async (c) => {
     authorName: input.authorName,
     message: input.title,
   });
+  await invalidateEdge(`portal:${board.portalToken}`);
   await recordActivity(
     board.workspace.ownerId,
     board.id,
@@ -614,7 +628,7 @@ portalAdmin.post("/cards/:id/approval", async (c) => {
     .select({ token: boards.portalToken })
     .from(boards)
     .where(eq(boards.id, boardId));
-  if (portal?.token) defer(() => invalidateEdge(`portal:${portal.token}`));
+  if (portal?.token) await invalidateEdge(`portal:${portal.token}`);
 
   let emailed = false;
   if (action === "request") {

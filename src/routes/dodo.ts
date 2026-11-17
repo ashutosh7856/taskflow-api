@@ -16,6 +16,8 @@ import {
   dodoProductId,
   dodoRequest,
   planForProduct,
+  PAYMENT_GRACE_DAYS,
+  subscriptionTrialEnd,
   trialDaysLeft,
   verifyDodoWebhook,
   type DodoSubscription,
@@ -43,6 +45,8 @@ function longDate(date: Date) {
  * access is still running) pay nothing until that access ends.
  */
 export function deferredDays(row: SubscriptionRow, plan: PaidPlan) {
+  // A failed payment is not prepaid time: never turn it into a free trial.
+  if (row.billingStatus === "past_due") return 0;
   const renewing =
     row.billingStatus === "active" &&
     Boolean(row.dodoSubscriptionId || row.paypalSubscriptionId);
@@ -52,6 +56,27 @@ export function deferredDays(row: SubscriptionRow, plan: PaidPlan) {
   const onTrial = !row.dodoSubscriptionId && !row.paypalSubscriptionId;
   if (!onTrial && row.plan !== plan) return 0;
   return trialDaysLeft(row.currentPeriodEnd);
+}
+
+/**
+ * Days of trial a checkout for `plan` gets right now. Same answer for the
+ * billing page preview and the real checkout. A subscription still inside
+ * its free trial keeps the rest of that trial when switching plans.
+ */
+export async function checkoutDeferredDays(
+  row: SubscriptionRow,
+  plan: PaidPlan,
+  current?: DodoSubscription,
+) {
+  if (!(row.dodoSubscriptionId && row.billingStatus === "active"))
+    return deferredDays(row, plan);
+  const sub =
+    current ||
+    (await dodoRequest<DodoSubscription>(
+      `/subscriptions/${row.dodoSubscriptionId}`,
+    ).catch(() => null));
+  const trialEnd = sub ? subscriptionTrialEnd(sub) : null;
+  return trialEnd ? trialDaysLeft(trialEnd) : 0;
 }
 
 async function accountRow(userId: string) {
@@ -136,6 +161,7 @@ dodoRouter.post("/billing/checkout", async (c) => {
     );
   const row = await accountRow(userId);
   const productId = dodoProductId(input.plan, input.interval);
+  let days = deferredDays(row, input.plan);
 
   if (row.dodoSubscriptionId && row.billingStatus === "active") {
     const current = await dodoRequest<DodoSubscription>(
@@ -143,6 +169,13 @@ dodoRouter.post("/billing/checkout", async (c) => {
     );
     if (current.product_id === productId)
       throw new HttpError(409, "You're already on this plan");
+    // Still in the free trial: Dodo's change-plan would charge right away.
+    // Start a new subscription with the remaining trial instead; the old one
+    // is cancelled once the new one is active (see applySubscription).
+    days = await checkoutDeferredDays(row, input.plan, current);
+  }
+
+  if (row.dodoSubscriptionId && row.billingStatus === "active" && !days) {
     await dodoRequest(`/subscriptions/${row.dodoSubscriptionId}/change-plan`, {
       method: "POST",
       body: JSON.stringify({
@@ -165,7 +198,6 @@ dodoRouter.post("/billing/checkout", async (c) => {
     where: eq(users.id, userId),
   });
   if (!account) throw new HttpError(404, "Account not found");
-  const days = deferredDays(row, input.plan);
   const session = await dodoRequest<{ session_id: string; checkout_url: string }>(
     "/checkouts",
     {
@@ -277,10 +309,22 @@ export async function applySubscription(
       : sub.status === "cancelled" || sub.status === "expired"
         ? "cancelled"
         : "past_due";
-  // Cancelled/expired keep access until the period they paid for ends.
-  const periodEnd = sub.next_billing_date
+  // Cancelled/expired keep access until the period they paid for ends. A
+  // failed payment (on hold) only gets a short grace period: Dodo's
+  // next_billing_date then points a whole period ahead, which would
+  // otherwise mean a free month or year.
+  let periodEnd = sub.next_billing_date
     ? new Date(sub.next_billing_date)
     : row.currentPeriodEnd;
+  if (status === "past_due") {
+    const failedAt = sub.previous_billing_date
+      ? new Date(sub.previous_billing_date)
+      : new Date();
+    const grace = new Date(
+      failedAt.getTime() + PAYMENT_GRACE_DAYS * 86_400_000,
+    );
+    periodEnd = periodEnd && periodEnd < grace ? periodEnd : grace;
+  }
   const discountId = sub.metadata?.discount_code_id || null;
   // Confirm and webhooks race: only the request that links the subscription
   // first sends the welcome email and counts the discount.
@@ -318,6 +362,24 @@ export async function applySubscription(
     .where(eq(subscriptions.userId, userId));
   invalidatePlan(userId);
 
+  // A newer subscription replaced an older one (plan change during the
+  // trial, or a fresh checkout after a failed payment): stop the old one so
+  // it can never bill again.
+  const replaced = row.dodoSubscriptionId;
+  if (claimed && replaced && replaced !== sub.subscription_id)
+    await dodoRequest(`/subscriptions/${replaced}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: "cancelled",
+        cancel_reason: "cancelled_by_merchant",
+      }),
+    }).catch((error) =>
+      console.error("Could not cancel replaced Dodo subscription", {
+        replaced,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+
   if (!claimed) return;
   if (discountId) await recordRedemption(discountId, userId, product.plan);
   const account = await db.query.users.findFirst({
@@ -325,7 +387,7 @@ export async function applySubscription(
   });
   if (!account) return;
   const name = planNames[product.plan];
-  const firstCharge = sub.trial_period_days > 0 && periodEnd;
+  const firstCharge = sub.trial_period_days > 0 ? periodEnd : null;
   const price =
     product.interval === "year"
       ? planCatalog[product.plan].yearlyPriceUsd
@@ -339,7 +401,7 @@ export async function applySubscription(
       eyebrow: "Subscription active",
       title: `Welcome to ${name}`,
       message: firstCharge
-        ? `Your ${name} plan is active. Nothing was charged today. Your first payment of ${amount} (plus any sales tax) is on ${longDate(periodEnd)}, when your trial ends, then ${amount} ${every} until you cancel. Cancel before ${longDate(periodEnd)} and you won't be charged at all.`
+        ? `Your ${name} plan is active. Nothing was charged today. Your first payment of ${amount} (plus any sales tax) is on ${longDate(firstCharge)}, when your trial ends, then ${amount} ${every} until you cancel. Cancel before ${longDate(firstCharge)} and you won't be charged at all.`
         : `Your ${name} plan is active. Unlimited client portals, your branding and AI client updates are switched on. Dodo Payments emails an invoice for every payment.`,
       details: [
         ["Plan", name],

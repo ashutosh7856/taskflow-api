@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { trialDaysLeft, verifyDodoWebhook } from "./dodo";
+import {
+  subscriptionTrialEnd,
+  trialDaysLeft,
+  verifyDodoWebhook,
+  type DodoSubscription,
+} from "./dodo";
 import { deferredDays } from "../routes/dodo";
 
 const secret = "whsec_" + btoa("danto-test-secret-0123456789abcdef");
@@ -79,6 +84,31 @@ describe("trial deferral", () => {
     const row = { ...base, plan: "pro" as const, billingStatus: "cancelled" as const, dodoSubscriptionId: "sub", currentPeriodEnd: inDays(5) };
     expect(deferredDays(row, "pro")).toBe(5);
     expect(deferredDays(row, "business")).toBe(0);
+  });
+
+  test("a failed payment (past_due) never becomes a free trial", () => {
+    // The real bug: Dodo put next_billing_date a year out after a failed
+    // charge, and the next checkout offered a 365-day trial.
+    const failed = {
+      ...base,
+      plan: "business" as const,
+      billingStatus: "past_due" as const,
+      dodoSubscriptionId: "sub_1",
+      currentPeriodEnd: inDays(365),
+    };
+    expect(deferredDays(failed, "business")).toBe(0);
+    expect(deferredDays(failed, "pro")).toBe(0);
+  });
+
+  test("subscriptionTrialEnd only while the trial is running", () => {
+    const sub = (created: Date, trial: number) =>
+      ({ created_at: created.toISOString(), trial_period_days: trial }) as DodoSubscription;
+    const now = new Date("2026-11-17T12:00:00Z");
+    const end = subscriptionTrialEnd(sub(new Date("2026-11-10T12:00:00Z"), 14), now);
+    expect(end?.toISOString()).toBe("2026-11-24T12:00:00.000Z");
+    expect(trialDaysLeft(end, now)).toBe(7);
+    expect(subscriptionTrialEnd(sub(new Date("2026-11-01T12:00:00Z"), 14), now)).toBeNull();
+    expect(subscriptionTrialEnd(sub(new Date("2026-11-10T12:00:00Z"), 0), now)).toBeNull();
   });
 
   test("trialDaysLeft rounds up partial days", () => {
