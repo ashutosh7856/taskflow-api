@@ -325,6 +325,16 @@ export async function applySubscription(
     );
     periodEnd = periodEnd && periodEnd < grace ? periodEnd : grace;
   }
+  // Cancelling after a failed payment doesn't turn the unpaid period into
+  // paid time: keep the grace end already stored.
+  if (
+    status === "cancelled" &&
+    row.billingStatus === "past_due" &&
+    row.dodoSubscriptionId === sub.subscription_id &&
+    row.currentPeriodEnd &&
+    (!periodEnd || row.currentPeriodEnd < periodEnd)
+  )
+    periodEnd = row.currentPeriodEnd;
   const discountId = sub.metadata?.discount_code_id || null;
   // Confirm and webhooks race: only the request that links the subscription
   // first sends the welcome email and counts the discount.
