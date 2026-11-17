@@ -1,0 +1,1 @@
+CREATE INDEX `invites_email_idx` ON `invites` (`email`);

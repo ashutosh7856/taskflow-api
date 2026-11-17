@@ -557,6 +557,8 @@ export const invites = sqliteTable(
   (table) => [
     index("invites_workspace_idx").on(table.workspaceId),
     index("invites_board_idx").on(table.boardId),
+    // "Invites for me" on every dashboard load.
+    index("invites_email_idx").on(table.email),
   ],
 );
 
@@ -654,4 +656,8 @@ export const checklistItemsRelations = relations(checklistItems, ({ one }) => ({
 export const commentsRelations = relations(comments, ({ one }) => ({
   card: one(cards, { fields: [comments.cardId], references: [cards.id] }),
   user: one(users, { fields: [comments.userId], references: [users.id] }),
+}));
+
+export const invitesRelations = relations(invites, ({ one }) => ({
+  inviter: one(users, { fields: [invites.invitedBy], references: [users.id] }),
 }));
