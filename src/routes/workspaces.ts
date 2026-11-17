@@ -3,6 +3,7 @@ import { Hono } from "hono";
 
 import { db } from "../db";
 import {
+  boardMembers,
   boards,
   subscriptions,
   users,
@@ -60,7 +61,8 @@ workspacesRouter.post("/workspaces", async (c) => {
 
 workspacesRouter.get("/workspaces/:id", async (c) => {
   const workspaceId = c.req.param("id");
-  await workspaceAccess(c.get("userId"), workspaceId);
+  const userId = c.get("userId");
+  const membership = await workspaceAccess(userId, workspaceId);
 
   const workspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.id, workspaceId),
@@ -73,8 +75,34 @@ workspacesRouter.get("/workspaces/:id", async (c) => {
       boards: true,
     },
   });
+  if (!workspace || membership.role !== "member") return c.json(workspace);
 
-  return c.json(workspace);
+  // Members (e.g. a client invited to one board) only see the boards they
+  // were added to, and only names of the other people.
+  const mine = await db
+    .select({ boardId: boardMembers.boardId })
+    .from(boardMembers)
+    .innerJoin(boards, eq(boardMembers.boardId, boards.id))
+    .where(
+      and(eq(boardMembers.userId, userId), eq(boards.workspaceId, workspaceId)),
+    );
+  const visible = new Set(mine.map((row) => row.boardId));
+  return c.json({
+    ...workspace,
+    boards: workspace.boards.filter((board) => visible.has(board.id)),
+    members: workspace.members.map((member) =>
+      member.userId === userId
+        ? member
+        : {
+            ...member,
+            user: member.user && {
+              id: member.user.id,
+              name: member.user.name,
+              avatarUrl: member.user.avatarUrl,
+            },
+          },
+    ),
+  });
 });
 
 workspacesRouter.patch("/workspaces/:id", async (c) => {
