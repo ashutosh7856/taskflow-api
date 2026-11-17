@@ -62,3 +62,28 @@ export async function issuePasswordReset(user: {
   );
   return true;
 }
+
+/**
+ * Admin-initiated reset: emails a link instead of a code. Codes expire in 15
+ * minutes and people often open admin emails later, so the reset page sends
+ * a fresh code the moment the link is opened (`send=1`).
+ */
+export async function sendPasswordResetLink(user: {
+  name: string;
+  email: string;
+}) {
+  await sendEmail({
+    to: user.email,
+    subject: "Reset your Danto password",
+    preheader: "Open the link to choose a new password.",
+    title: "Reset your password",
+    eyebrow: "Account security",
+    message: `Hi ${user.name.split(" ")[0]}, our team started a password reset for your account. Open the link below and we'll email you a 6-digit code to choose a new password.`,
+    actionLabel: "Reset password",
+    actionUrl: frontendUrl(
+      `/forgot-password?email=${encodeURIComponent(user.email)}&send=1`,
+    ),
+    footnote:
+      "Didn't expect this? You can ignore this email. Your password won't change unless someone enters a code sent to this inbox.",
+  });
+}

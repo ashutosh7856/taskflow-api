@@ -40,7 +40,7 @@ import {
   invalidatePlan,
   planCatalog,
 } from "../services/entitlements";
-import { issuePasswordReset } from "../services/password-reset";
+import { sendPasswordResetLink } from "../services/password-reset";
 import { receiptNumber, sendReceipt } from "../services/receipts";
 import {
   createDiscountSchema,
@@ -623,12 +623,7 @@ adminRouter.post("/admin/users/:id/password-reset", async (c) => {
   const userId = c.req.param("id");
   const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
   if (!user) throw new HttpError(404, "User not found");
-  const sent = await issuePasswordReset(user);
-  if (!sent)
-    throw new HttpError(
-      429,
-      "3 codes were already sent in the last 15 minutes",
-    );
+  await sendPasswordResetLink(user);
   await audit(c.get("userId"), "user.password_reset_sent", userId);
   return c.json({ ok: true });
 });
