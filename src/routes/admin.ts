@@ -217,7 +217,7 @@ async function overviewData() {
       .limit(8),
   ]);
 
-  // Reverse-trial health: new accounts get 14 days of Pro without PayPal.
+  // Reverse-trial health: new accounts get 14 days of Pro with no card.
   const trialRows = await db
     .select({
       createdAt: users.createdAt,
@@ -264,7 +264,7 @@ async function overviewData() {
         currentPeriodEnd: row.currentPeriodEnd,
       }) !== "free",
   );
-  // Comped accounts (no PayPal subscription) don't count as revenue.
+  // Comped accounts (no paid subscription) don't count as revenue.
   const billed = paying.filter((row) => row.paypal);
   const activePlans = {
     pro: billed.filter((row) => row.plan === "pro").length,

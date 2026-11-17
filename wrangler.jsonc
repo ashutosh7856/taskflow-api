@@ -34,7 +34,6 @@
     "CORS_ORIGINS": "https://danto.app,https://www.danto.app,https://taskflow-ui-b5u.pages.dev",
     "OPENAI_MODEL": "gpt-4o-mini",
     "OPENAI_FALLBACK_MODEL": "gpt-6.1-sol",
-    "PAYPAL_ENV": "sandbox",
     // Dodo Payments (src/services/dodo.ts). DODO_API_KEY and
     // DODO_WEBHOOK_SECRET are wrangler secrets. Test and live product ids
     // differ: swap both DODO_ENV and DODO_PRODUCTS at go-live.

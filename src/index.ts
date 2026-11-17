@@ -7,7 +7,6 @@ import authRoutes from "./routes/auth";
 import apiRoutes from "./routes/api";
 import { HttpError, type AppEnv } from "./lib/http";
 import { openApi } from "./openapi";
-import { paypalWebhook } from "./routes/billing";
 import { dodoWebhook } from "./routes/dodo";
 import { publicPortal } from "./routes/portal";
 import { publicFiles } from "./routes/files";
@@ -61,7 +60,6 @@ app.get("/templates", (c) => {
 app.get("/openapi.json", (c) => c.json(openApi));
 app.get("/docs", swaggerUI({ url: "/openapi.json" }));
 app.route("/auth", authRoutes);
-app.route("/webhooks", paypalWebhook);
 app.route("/webhooks", dodoWebhook);
 app.route("/portal", publicPortal);
 app.route("/files", publicFiles);

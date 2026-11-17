@@ -1,6 +1,6 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
-import { db, defer } from "../db";
+import { db } from "../db";
 import { paymentEvents, subscriptions, users } from "../db/schema";
 import { frontendUrl, sendEmail } from "./email";
 
@@ -66,7 +66,7 @@ export async function receiptDetails(paymentId: string, userId?: string) {
     currency: payment.currency,
     plan: planNames[payment.plan || ""] || "Subscription",
     interval,
-    paymentMethod: payment.provider === "dodo" ? "Dodo Payments" : "PayPal",
+    paymentMethod: "Dodo Payments",
     reference: payment.providerEventId,
     subscriptionId: payment.providerSubscriptionId,
     customer: { name: customer.name, email: customer.email },
@@ -105,27 +105,4 @@ export async function sendReceipt(paymentId: string) {
     actionUrl: frontendUrl(`/billing/receipts/${receipt.id}`),
     footnote: `Questions about this charge? Reply to ${SELLER.email}.`,
   });
-}
-
-/**
- * PayPal's first payment webhook can arrive before the app links the
- * subscription to the account. Once it's linked, attach those payments and
- * send the receipts that couldn't be sent earlier.
- */
-export async function claimUnlinkedPayments(
-  subscriptionId: string,
-  userId: string,
-  plan: PaymentRow["plan"],
-) {
-  const claimed = await db
-    .update(paymentEvents)
-    .set({ userId, plan })
-    .where(
-      and(
-        eq(paymentEvents.providerSubscriptionId, subscriptionId),
-        isNull(paymentEvents.userId),
-      ),
-    )
-    .returning({ id: paymentEvents.id });
-  for (const row of claimed) defer(() => sendReceipt(row.id));
 }
