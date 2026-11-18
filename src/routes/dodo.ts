@@ -184,6 +184,20 @@ dodoRouter.post("/billing/checkout", async (c) => {
         proration_billing_mode: "prorated_immediately",
       }),
     });
+    // Dodo keeps the original checkout's metadata (old plan, interval and
+    // discount) on the subscription and copies it onto later payments, which
+    // makes the dashboard say "pro / month" on a Team yearly charge.
+    await dodoRequest(`/subscriptions/${row.dodoSubscriptionId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        metadata: { user_id: userId, plan: input.plan, interval: input.interval },
+      }),
+    }).catch((error) =>
+      console.error("Could not update Dodo subscription metadata", {
+        subscription: row.dodoSubscriptionId,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
     const updated = await dodoRequest<DodoSubscription>(
       `/subscriptions/${row.dodoSubscriptionId}`,
     );
