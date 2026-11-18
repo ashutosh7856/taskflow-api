@@ -21,6 +21,7 @@ import {
 } from "../lib/access";
 import { invalidateEdge } from "../lib/cache";
 import { getTemplate, templateIds } from "../lib/templates";
+import { ensureListRoles } from "../services/list-roles";
 import { purgeFiles } from "../services/storage";
 import { body, HttpError, type AppEnv } from "../lib/http";
 import { recordActivity } from "../services/activity";
@@ -92,6 +93,7 @@ boardsRouter.post("/workspaces/:workspaceId/boards", async (c) => {
 boardsRouter.get("/boards/:id", async (c) => {
   const boardId = c.req.param("id");
   const currentMembership = await boardAccess(c.get("userId"), boardId);
+  await ensureListRoles(boardId);
 
   const board = await db.query.boards.findFirst({
     where: eq(boards.id, boardId),
