@@ -175,6 +175,8 @@ export const paymentEvents = sqliteTable(
       onDelete: "set null",
     }),
     plan: planEnum("plan"),
+    /** month | year at the time of payment (null for old rows). */
+    billingInterval: text("billing_interval"),
     status: text("status").notNull(),
     amount: text("amount").notNull(),
     currency: text("currency").notNull(),

@@ -190,7 +190,11 @@ dodoRouter.post("/billing/checkout", async (c) => {
     await dodoRequest(`/subscriptions/${row.dodoSubscriptionId}`, {
       method: "PATCH",
       body: JSON.stringify({
-        metadata: { user_id: userId, plan: input.plan, interval: input.interval },
+        metadata: {
+          user_id: userId,
+          plan: input.plan,
+          interval: input.interval,
+        },
       }),
     }).catch((error) =>
       console.error("Could not update Dodo subscription metadata", {
@@ -212,29 +216,29 @@ dodoRouter.post("/billing/checkout", async (c) => {
     where: eq(users.id, userId),
   });
   if (!account) throw new HttpError(404, "Account not found");
-  const session = await dodoRequest<{ session_id: string; checkout_url: string }>(
-    "/checkouts",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        product_cart: [{ product_id: productId, quantity: 1 }],
-        customer: row.dodoCustomerId
-          ? { customer_id: row.dodoCustomerId }
-          : { email: account.email, name: account.name },
-        ...(days > 0 ? { subscription_data: { trial_period_days: days } } : {}),
-        ...(discount ? { discount_codes: [discount.code] } : {}),
-        metadata: {
-          user_id: userId,
-          plan: input.plan,
-          interval: input.interval,
-          ...(discount ? { discount_code_id: discount.id } : {}),
-        },
-        return_url: frontendUrl("/billing?checkout=done"),
-        cancel_url: frontendUrl("/billing"),
-        customization: { theme: "light" },
-      }),
-    },
-  );
+  const session = await dodoRequest<{
+    session_id: string;
+    checkout_url: string;
+  }>("/checkouts", {
+    method: "POST",
+    body: JSON.stringify({
+      product_cart: [{ product_id: productId, quantity: 1 }],
+      customer: row.dodoCustomerId
+        ? { customer_id: row.dodoCustomerId }
+        : { email: account.email, name: account.name },
+      ...(days > 0 ? { subscription_data: { trial_period_days: days } } : {}),
+      ...(discount ? { discount_codes: [discount.code] } : {}),
+      metadata: {
+        user_id: userId,
+        plan: input.plan,
+        interval: input.interval,
+        ...(discount ? { discount_code_id: discount.id } : {}),
+      },
+      return_url: frontendUrl("/billing?checkout=done"),
+      cancel_url: frontendUrl("/billing"),
+      customization: { theme: "light" },
+    }),
+  });
   return c.json({
     checkoutUrl: session.checkout_url,
     deferredDays: days,
@@ -413,8 +417,21 @@ export async function applySubscription(
     product.interval === "year"
       ? planCatalog[product.plan].yearlyPriceUsd
       : planCatalog[product.plan].priceUsd;
-  const amount = `$${price.toFixed(2)} USD`;
+  const usd = (value: number) => `$${value.toFixed(2)} USD`;
+  const amount = usd(price);
   const every = product.interval === "year" ? "every year" : "every month";
+  // Discount codes take a percentage off the first billing cycle only.
+  const discount = discountId
+    ? await db.query.discountCodes.findFirst({
+        where: eq(discountCodes.id, discountId),
+      })
+    : null;
+  const firstAmount = discount
+    ? usd(Math.round(price * (100 - discount.percentOff)) / 100)
+    : amount;
+  const discountNote = discount
+    ? ` (${discount.percentOff}% off with ${discount.code})`
+    : "";
   defer(() =>
     sendEmail({
       to: account.email,
@@ -422,14 +439,22 @@ export async function applySubscription(
       eyebrow: "Subscription active",
       title: `Welcome to ${name}`,
       message: firstCharge
-        ? `Your ${name} plan is active. Nothing was charged today. Your first payment of ${amount} (plus any sales tax) is on ${longDate(firstCharge)}, when your trial ends, then ${amount} ${every} until you cancel. Cancel before ${longDate(firstCharge)} and you won't be charged at all.`
+        ? `Your ${name} plan is active. Nothing was charged today. Your first payment of ${firstAmount}${discountNote} plus any sales tax is on ${longDate(firstCharge)}, when your trial ends, then ${amount} ${every} until you cancel. Cancel before ${longDate(firstCharge)} and you won't be charged at all.`
         : `Your ${name} plan is active. Unlimited client portals, your branding and AI client updates are switched on. Dodo Payments emails an invoice for every payment.`,
       details: [
         ["Plan", name],
+        ...(discount
+          ? ([
+              ["First payment amount", `${firstAmount}${discountNote}`],
+            ] as Array<[string, string]>)
+          : []),
         ["Billing", `${amount} ${every}`],
         ...(periodEnd
           ? ([
-              [firstCharge ? "First payment" : "Next payment", longDate(periodEnd)],
+              [
+                firstCharge ? "First payment" : "Next payment",
+                longDate(periodEnd),
+              ],
             ] as Array<[string, string]>)
           : []),
         ["Manage", "Cancel anytime from your billing page"],
@@ -482,11 +507,25 @@ dodoWebhook.post("/dodo", async (c) => {
     await applySubscription(fresh);
   }
 
-  if (event.type === "payment.succeeded" && data.payment_id) {
+  // A ₹0/$0 payment is only Dodo saving the card when a trial starts: it is
+  // not a receipt. Real payments record the plan and billing period of the
+  // subscription at the time of payment (it may change plan later).
+  if (
+    event.type === "payment.succeeded" &&
+    data.payment_id &&
+    Number(data.total_amount || 0) > 0
+  ) {
     const owner = data.subscription_id
       ? await db.query.subscriptions.findFirst({
           where: eq(subscriptions.dodoSubscriptionId, data.subscription_id),
         })
+      : null;
+    const paidFor = data.subscription_id
+      ? await dodoRequest<DodoSubscription>(
+          `/subscriptions/${data.subscription_id}`,
+        )
+          .then((sub) => planForProduct(sub.product_id))
+          .catch(() => null)
       : null;
     const userId = owner?.userId || data.metadata?.user_id || null;
     await db
@@ -496,7 +535,8 @@ dodoWebhook.post("/dodo", async (c) => {
         providerEventId: data.payment_id,
         providerSubscriptionId: data.subscription_id || null,
         userId: userId && /^[0-9a-f-]{36}$/i.test(userId) ? userId : null,
-        plan: owner?.plan || data.metadata?.plan || null,
+        plan: paidFor?.plan || owner?.plan || data.metadata?.plan || null,
+        billingInterval: paidFor?.interval || null,
         status: "completed",
         amount: (Number(data.total_amount || 0) / 100).toFixed(2),
         currency: data.currency || "USD",
@@ -517,6 +557,7 @@ dodoWebhook.post("/dodo", async (c) => {
         providerSubscriptionId: original?.providerSubscriptionId || null,
         userId: original?.userId || null,
         plan: original?.plan || null,
+        billingInterval: original?.billingInterval || null,
         status: "refunded",
         amount: (Number(data.amount || 0) / 100).toFixed(2),
         currency: data.currency || original?.currency || "USD",

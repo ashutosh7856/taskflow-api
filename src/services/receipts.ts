@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 
 import { db } from "../db";
-import { paymentEvents, subscriptions, users } from "../db/schema";
+import { paymentEvents, users } from "../db/schema";
 import { frontendUrl, sendEmail } from "./email";
 
 export const SELLER = {
@@ -48,15 +48,18 @@ export async function receiptDetails(paymentId: string, userId?: string) {
       : eq(paymentEvents.id, paymentId),
   });
   if (!payment?.userId) return null;
-  const [customer, subscription] = await Promise.all([
-    db.query.users.findFirst({ where: eq(users.id, payment.userId) }),
-    db.query.subscriptions.findFirst({
-      where: eq(subscriptions.userId, payment.userId),
-    }),
-  ]);
+  const customer = await db.query.users.findFirst({
+    where: eq(users.id, payment.userId),
+  });
   if (!customer) return null;
+  // The period paid for at the time, not the account's current one (a plan
+  // change later must not rewrite old receipts). Old rows: not stored.
   const interval =
-    subscription?.billingInterval === "year" ? "Yearly" : "Monthly";
+    payment.billingInterval === "year"
+      ? "Yearly"
+      : payment.billingInterval === "month"
+        ? "Monthly"
+        : null;
   return {
     id: payment.id,
     number: receiptNumber(payment),
@@ -96,7 +99,12 @@ export async function sendReceipt(paymentId: string) {
     details: [
       ["Receipt number", receipt.number],
       ["Date", formatDate(new Date(receipt.issuedAt))],
-      ["Plan", `${receipt.plan}, billed ${receipt.interval.toLowerCase()}`],
+      [
+        "Plan",
+        receipt.interval
+          ? `${receipt.plan}, billed ${receipt.interval.toLowerCase()}`
+          : receipt.plan,
+      ],
       [refunded ? "Refunded" : "Amount paid", amount],
       ["Paid with", receipt.paymentMethod],
       ["Billed to", `${receipt.customer.name} (${receipt.customer.email})`],

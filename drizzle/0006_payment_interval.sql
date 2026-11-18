@@ -1,0 +1,1 @@
+ALTER TABLE `payment_events` ADD `billing_interval` text;

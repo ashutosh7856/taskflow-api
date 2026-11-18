@@ -43,6 +43,13 @@
       "when": 1794916006466,
       "tag": "0005_invites_email",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1794981989053,
+      "tag": "0006_payment_interval",
+      "breakpoints": true
     }
   ]
 }
