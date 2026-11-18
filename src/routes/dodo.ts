@@ -291,14 +291,11 @@ export async function applySubscription(
     return;
   }
   // A late event for an old subscription must not overwrite a newer one.
+  // Only a paid/trialing (active) subscription can be linked; a cancelled or
+  // on-hold event for a subscription we don't track (an old or reset one)
+  // must never grant access until its next billing date.
   const isNew = row.dodoSubscriptionId !== sub.subscription_id;
-  if (
-    isNew &&
-    row.dodoSubscriptionId &&
-    row.billingStatus === "active" &&
-    sub.status !== "active"
-  )
-    return;
+  if (isNew && sub.status !== "active") return;
   if (sub.status === "pending") return;
 
   const status =
