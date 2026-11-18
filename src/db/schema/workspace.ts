@@ -333,6 +333,13 @@ export const cards = sqliteTable(
       .notNull(),
     approvalRequestedAt: timestamp("approval_requested_at"),
     approvalRespondedAt: timestamp("approval_responded_at"),
+    /** Why work can't continue; null when not blocked. */
+    blockedReason: text("blocked_reason"),
+    /** Who it's waiting on. "client" items show in the client portal. */
+    blockedOn: text("blocked_on", { enum: ["client", "team", "other"] }),
+    blockedAt: timestamp("blocked_at"),
+    /** Why a late card is late. Shown to the client in the portal. */
+    delayReason: text("delay_reason"),
     createdAt: timestamp("created_at")
       .$defaultFn(() => new Date())
       .notNull(),

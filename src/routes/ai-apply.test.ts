@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { mergePlan, normalizeTitle } from "./ai";
+import { alignPlan, mergePlan, normalizeTitle } from "./ai";
 
 const task = (title: string) => ({
   title,
@@ -56,4 +56,63 @@ describe("AI plan apply", () => {
   test("normalizes titles", () => {
     expect(normalizeTitle(" To-Do ")).toBe(normalizeTitle("TODO"));
   });
+
+  test("template boards: fills their own working lists, never review or done", () => {
+    const staged = [
+      { id: "disc", name: "Discovery & content", position: 0, role: "intake" as const, cards: [] },
+      { id: "design", name: "Design", position: 1, role: "active" as const, cards: [] },
+      { id: "build", name: "Build", position: 2, role: "active" as const, cards: [] },
+      { id: "review", name: "Client review", position: 3, role: "review" as const, cards: [] },
+      { id: "live", name: "Live", position: 4, role: "done" as const, cards: [] },
+    ];
+    const dated = (title: string, days: number) => ({ ...task(title), dueOffsetDays: days });
+    const plan = {
+      lists: [
+        { name: "Discovery", tasks: [dated("Gather menu photos", 20)] },
+        { name: "Designs", tasks: [dated("Homepage mockup", 5)] },
+        { name: "Development", tasks: [task("Build booking form")] },
+        { name: "Client review", tasks: [task("Present site to client")] },
+        { name: "Live", tasks: [task("Launch")] },
+      ],
+    } as any;
+    const { newLists, newCards } = mergePlan(plan, staged);
+    expect(newLists).toEqual([]);
+    const where = Object.fromEntries(newCards.map((card) => [card.title, card.listId]));
+    expect(where).toEqual({
+      "Gather menu photos": "disc",
+      "Homepage mockup": "design",
+      "Build booking form": "build",
+      "Present site to client": "build",
+      Launch: "build",
+    });
+    const due = Object.fromEntries(newCards.map((card) => [card.title, card.dueDate?.getTime()]));
+    // Design was due before discovery; it's moved up so stages stay in order.
+    expect(due["Homepage mockup"]!).toBeGreaterThanOrEqual(due["Gather menu photos"]!);
+  });
+
+  test("preview is regrouped into the board's own lists", () => {
+    const staged = [
+      { id: "ideas", name: "Ideas", position: 0, role: "intake" as const, cards: [] },
+      { id: "draft", name: "Drafting", position: 1, role: "active" as const, cards: [] },
+      { id: "ok", name: "Client approval", position: 2, role: "review" as const, cards: [] },
+      { id: "sched", name: "Scheduled", position: 3, role: "active" as const, cards: [] },
+      { id: "pub", name: "Published", position: 4, role: "done" as const, cards: [] },
+    ];
+    const plan = {
+      projectName: "x",
+      overview: "",
+      lists: [
+        { name: "Backlog", tasks: [task("Reel idea")] },
+        { name: "Writing", tasks: [task("Caption")] },
+        { name: "Client approval", tasks: [task("Send for OK")] },
+      ],
+    } as any;
+    const aligned = alignPlan(plan, staged);
+    expect(aligned.lists.map((list: any) => [list.name, list.tasks.map((t: any) => t.title)])).toEqual([
+      ["Ideas", ["Reel idea"]],
+      ["Drafting", ["Caption", "Send for OK"]],
+    ]);
+    expect(mergePlan(aligned, staged).newLists).toEqual([]);
+  });
 });
+

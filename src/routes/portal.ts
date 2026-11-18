@@ -210,6 +210,12 @@ publicPortal.get("/:token", async (c) => {
           awaitingApproval: visibleCards.filter(
             (card) => card.approvalStatus === "pending",
           ).length,
+          waitingOnClient: visibleCards.filter(
+            (card) =>
+              !card.isCompleted &&
+              card.blockedOn === "client" &&
+              !!card.blockedReason,
+          ).length,
           overdue: visibleCards.filter(
             (card) =>
               !card.isCompleted && card.dueDate && card.dueDate.getTime() < now,
@@ -233,6 +239,17 @@ publicPortal.get("/:token", async (c) => {
               completedAt: card.completedAt,
               approvalStatus: card.approvalStatus,
               approvalRequestedAt: card.approvalRequestedAt,
+              // Only what the client is asked for; internal blockers stay private.
+              waitingOnClient:
+                !card.isCompleted && card.blockedOn === "client"
+                  ? card.blockedReason
+                  : null,
+              delayReason:
+                !card.isCompleted &&
+                card.dueDate &&
+                card.dueDate.getTime() < now
+                  ? card.delayReason
+                  : null,
               fields: clientFields(board.template, card.fields),
               checklist: {
                 done: items.filter((i) => i.isDone).length,
@@ -599,6 +616,66 @@ portalAdmin.post("/cards/:id/approval", async (c) => {
     c,
     z.object({ action: z.enum(["request", "cancel"]) }),
   );
+  return c.json(await setCardApproval(userId, boardId, cardId, action));
+});
+
+/** Branded email to the portal's client, if the portal is live. */
+async function emailClient(
+  boardId: string,
+  build: (sender: string, boardName: string, portal: string) => {
+    subject: string;
+    title: string;
+    eyebrow: string;
+    message: string;
+    actionLabel: string;
+    actionUrl: string;
+  },
+) {
+  const board = await db.query.boards.findFirst({
+    where: eq(boards.id, boardId),
+    with: { workspace: true },
+  });
+  if (!board?.portalEnabled || !board.portalToken || !board.portalClientEmail)
+    return false;
+  const sender = board.workspace.brandName || board.workspace.name;
+  const plan = await ownerPlan(board.workspace.ownerId);
+  const branded = planCatalog[plan].portalBranding;
+  const content = build(sender, board.name, portalUrl(board.portalToken));
+  const result = await sendEmail({
+    to: board.portalClientEmail,
+    ...content,
+    details: [
+      ["Project", board.name],
+      ["From", sender],
+    ],
+    brand: {
+      name: sender,
+      color: branded ? board.workspace.brandColor : null,
+      logoUrl: branded ? board.workspace.brandLogoUrl : null,
+    },
+    showCredit: !planCatalog[plan].whiteLabel,
+  });
+  return result.sent;
+}
+
+async function refreshPortal(boardId: string) {
+  const [portal] = await db
+    .select({ token: boards.portalToken })
+    .from(boards)
+    .where(eq(boards.id, boardId));
+  if (portal?.token) await invalidateEdge(`portal:${portal.token}`);
+}
+
+/**
+ * Ask the client to approve a card (or withdraw the ask). Used by the card
+ * drawer button and by moving a card into the board's review list.
+ */
+export async function setCardApproval(
+  userId: string,
+  boardId: string,
+  cardId: string,
+  action: "request" | "cancel",
+) {
   const [card] = await db
     .update(cards)
     .set(
@@ -624,46 +701,37 @@ portalAdmin.post("/cards/:id/approval", async (c) => {
       cardId,
       cardTitle: card.title,
     });
-  const [portal] = await db
-    .select({ token: boards.portalToken })
-    .from(boards)
-    .where(eq(boards.id, boardId));
-  if (portal?.token) await invalidateEdge(`portal:${portal.token}`);
+  await refreshPortal(boardId);
 
-  let emailed = false;
-  if (action === "request") {
-    const board = await db.query.boards.findFirst({
-      where: eq(boards.id, boardId),
-      with: { workspace: true },
-    });
-    if (board?.portalEnabled && board.portalToken && board.portalClientEmail) {
-      const sender = board.workspace.brandName || board.workspace.name;
-      const plan = await ownerPlan(board.workspace.ownerId);
-      const branded = planCatalog[plan].portalBranding;
-      const result = await sendEmail({
-        to: board.portalClientEmail,
-        subject: `Ready for your review: ${card.title}`,
-        title: card.title,
-        eyebrow: "Approval requested",
-        message: `${sender} has marked this as ready for your review. Take a look, then approve it or request changes. It takes one click, and you don't need an account.`,
-        details: [
-          ["Project", board.name],
-          ["From", sender],
-        ],
-        brand: {
-          name: sender,
-          color: branded ? board.workspace.brandColor : null,
-          logoUrl: branded ? board.workspace.brandLogoUrl : null,
-        },
-        showCredit: !planCatalog[plan].whiteLabel,
-        actionLabel: "Review and approve",
-        actionUrl: `${portalUrl(board.portalToken)}?card=${cardId}`,
-      });
-      emailed = result.sent;
-    }
-  }
-  return c.json({ card, emailed });
-});
+  const emailed =
+    action === "request" && card
+      ? await emailClient(boardId, (sender, _name, portal) => ({
+          subject: `Ready for your review: ${card.title}`,
+          title: card.title,
+          eyebrow: "Approval requested",
+          message: `${sender} has marked this as ready for your review. Take a look, then approve it or request changes. It takes one click, and you don't need an account.`,
+          actionLabel: "Review and approve",
+          actionUrl: `${portal}?card=${cardId}`,
+        }))
+      : false;
+  return { card, emailed };
+}
+
+/** Tell the client a card is waiting on them, with the reason. */
+export async function emailClientBlocked(
+  boardId: string,
+  card: { id: string; title: string; blockedReason: string | null },
+) {
+  await refreshPortal(boardId);
+  return emailClient(boardId, (sender, _name, portal) => ({
+    subject: `${sender} needs something from you: ${card.title}`,
+    title: card.title,
+    eyebrow: "Waiting on you",
+    message: `${sender} can't continue this until they hear from you.\n\n${card.blockedReason || ""}`,
+    actionLabel: "Open the project",
+    actionUrl: `${portal}?card=${card.id}`,
+  }));
+}
 
 portalAdmin.put("/workspaces/:id/branding", async (c) => {
   const workspaceId = c.req.param("id");

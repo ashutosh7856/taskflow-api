@@ -21,6 +21,7 @@ import { body, HttpError, type AppEnv } from "../lib/http";
 import { recordActivity } from "../services/activity";
 import { frontendUrl, sendEmail } from "../services/email";
 import { notifySlack, slackEscape } from "../services/slack";
+import { emailClientBlocked, setCardApproval } from "./portal";
 
 const cardsRouter = new Hono<AppEnv>();
 
@@ -49,6 +50,11 @@ const updateCardSchema = z.object({
   priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
   estimateMinutes: z.number().int().min(0).max(100000).nullable().optional(),
   clientVisible: z.boolean().optional(),
+  /** Non-empty marks the card blocked; null or "" clears it. */
+  blockedReason: z.string().trim().max(400).nullable().optional(),
+  blockedOn: z.enum(["client", "team", "other"]).optional(),
+  /** Why a late card is late; shown to the client. */
+  delayReason: z.string().trim().max(400).nullable().optional(),
   /** Partial: only the keys sent change; null clears a field. */
   fields: z.record(z.string(), z.unknown()).optional(),
 });
@@ -169,6 +175,119 @@ cardsRouter.get("/cards/:id", async (c) => {
   return c.json(card);
 });
 
+type CardRow = typeof cards.$inferSelect;
+
+/**
+ * Column changes for blocked / delayed status. Finishing a card clears both,
+ * and moving the due date into the future clears the delay reason.
+ */
+export function blockerChanges(
+  current: Pick<CardRow, "blockedReason" | "blockedOn" | "blockedAt" | "delayReason">,
+  input: {
+    blockedReason?: string | null;
+    blockedOn?: "client" | "team" | "other";
+    delayReason?: string | null;
+    isCompleted?: boolean;
+    dueDate?: Date | null;
+  },
+): Partial<Pick<CardRow, "blockedReason" | "blockedOn" | "blockedAt" | "delayReason">> {
+  const out: Partial<Pick<CardRow, "blockedReason" | "blockedOn" | "blockedAt" | "delayReason">> = {};
+  if (input.blockedReason !== undefined) {
+    const reason = input.blockedReason?.trim() || null;
+    out.blockedReason = reason;
+    out.blockedOn = reason ? input.blockedOn || current.blockedOn || "team" : null;
+    out.blockedAt = reason ? (current.blockedReason ? current.blockedAt : new Date()) : null;
+  } else if (input.blockedOn && current.blockedReason) {
+    out.blockedOn = input.blockedOn;
+  }
+  if (input.delayReason !== undefined)
+    out.delayReason = input.delayReason?.trim() || null;
+  if (input.isCompleted === true) {
+    out.blockedReason = null;
+    out.blockedOn = null;
+    out.blockedAt = null;
+    out.delayReason = null;
+  }
+  if (input.dueDate && input.dueDate.getTime() > Date.now() && input.delayReason === undefined)
+    out.delayReason = null;
+  return out;
+}
+
+/** Activity, owner email and client email when a card gets blocked. */
+async function afterStatusChange(
+  userId: string,
+  boardId: string,
+  before: CardRow,
+  after: CardRow,
+) {
+  const blockedNow = !!after.blockedReason;
+  const reasonChanged = blockedNow && after.blockedReason !== before.blockedReason;
+  const onChanged = blockedNow && after.blockedOn !== before.blockedOn;
+  if (blockedNow && (reasonChanged || onChanged)) {
+    await recordActivity(userId, boardId, "card.blocked", after.id, {
+      reason: after.blockedReason,
+      on: after.blockedOn,
+    });
+    if (after.blockedOn === "client") {
+      notifySlack({
+        boardId,
+        event: "client",
+        actorId: userId,
+        verb: `is waiting on the client (${slackEscape(after.blockedReason!)}) for`,
+        cardId: after.id,
+        cardTitle: after.title,
+      });
+      await emailClientBlocked(boardId, after);
+    }
+    await emailOwner(userId, boardId, after, `Blocked: ${after.title}`,
+      `${after.blockedReason}`, "Card blocked");
+  } else if (!blockedNow && before.blockedReason) {
+    await recordActivity(userId, boardId, "card.unblocked", after.id);
+  }
+  if (after.delayReason && after.delayReason !== before.delayReason) {
+    await recordActivity(userId, boardId, "card.delayed", after.id, {
+      reason: after.delayReason,
+    });
+    await emailOwner(userId, boardId, after, `Running late: ${after.title}`,
+      after.delayReason, "Delay noted");
+  }
+}
+
+/** Email the workspace owner about a teammate's change (never themselves). */
+async function emailOwner(
+  actorId: string,
+  boardId: string,
+  card: CardRow,
+  subject: string,
+  message: string,
+  eyebrow: string,
+) {
+  const board = await db.query.boards.findFirst({
+    where: eq(boards.id, boardId),
+    with: { workspace: { columns: { ownerId: true } } },
+  });
+  const ownerId = board?.workspace.ownerId;
+  if (!board || !ownerId || ownerId === actorId) return;
+  const [owner, actor] = await Promise.all([
+    db.query.users.findFirst({ where: eq(users.id, ownerId) }),
+    db.query.users.findFirst({ where: eq(users.id, actorId) }),
+  ]);
+  if (!owner) return;
+  await sendEmail({
+    to: owner.email,
+    subject,
+    title: card.title,
+    eyebrow,
+    message: `${actor?.name || "A teammate"}: ${message}`,
+    details: [
+      ["Board", board.name],
+      ["Due", card.dueDate ? card.dueDate.toDateString() : "No due date"],
+    ],
+    actionLabel: "Open card",
+    actionUrl: frontendUrl(`/boards/${boardId}?card=${card.id}`),
+  });
+}
+
 cardsRouter.patch("/cards/:id", async (c) => {
   const cardId = c.req.param("id");
   const userId = c.get("userId");
@@ -186,7 +305,14 @@ cardsRouter.patch("/cards/:id", async (c) => {
     where: eq(cards.id, cardId),
   });
   if (!current) throw new HttpError(404, "Card not found");
-  const { fields, ...changes } = input;
+  const { fields, blockedReason, blockedOn, delayReason, ...changes } = input;
+  const status = blockerChanges(current, {
+    blockedReason,
+    blockedOn,
+    delayReason,
+    isCompleted: input.isCompleted,
+    dueDate: input.dueDate,
+  });
   const needsBoard =
     fields !== undefined ||
     changes.isCompleted !== undefined ||
@@ -231,6 +357,7 @@ cardsRouter.patch("/cards/:id", async (c) => {
     .update(cards)
     .set({
       ...changes,
+      ...status,
       ...(completionChanged
         ? { completedAt: changes.isCompleted ? new Date() : null }
         : {}),
@@ -243,6 +370,31 @@ cardsRouter.patch("/cards/:id", async (c) => {
     .returning();
 
   await recordActivity(userId, currentBoardId, "card.updated", cardId, input);
+  await afterStatusChange(userId, currentBoardId, current, card);
+  if (context && card.listId !== current.listId) {
+    const roleOf = (id: string) =>
+      context.lists.find((list) => list.id === id)?.role;
+    const intoReview = roleOf(card.listId) === "review";
+    const outOfReview = roleOf(current.listId) === "review";
+    if (intoReview && card.approvalStatus !== "pending") {
+      const board = await db.query.boards.findFirst({
+        where: eq(boards.id, currentBoardId),
+        columns: { portalEnabled: true },
+      });
+      if (board?.portalEnabled) {
+        const result = await setCardApproval(
+          userId,
+          currentBoardId,
+          cardId,
+          "request",
+        );
+        if (result.card) Object.assign(card, result.card);
+      }
+    } else if (outOfReview && !intoReview && card.approvalStatus === "pending") {
+      const result = await setCardApproval(userId, currentBoardId, cardId, "cancel");
+      if (result.card) Object.assign(card, result.card);
+    }
+  }
   if (completionChanged && card.isCompleted) {
     const list = context?.lists.find((item) => item.id === card.listId);
     const doneName = list?.role === "done" ? list.name : null;

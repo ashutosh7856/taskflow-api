@@ -1,10 +1,13 @@
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import { Hono } from "hono";
 
 import { db } from "../db";
 import {
   boardMembers,
   boards,
+  cardMembers,
+  cards,
+  lists,
   subscriptions,
   users,
   workspaceMembers,
@@ -102,6 +105,114 @@ workspacesRouter.get("/workspaces/:id", async (c) => {
             },
           },
     ),
+  });
+});
+
+/**
+ * Everything that needs someone's attention across the boards you can see:
+ * blocked work, late work (with the reason, if given), changes the client
+ * asked for, and items waiting on the client. No AI, always current.
+ */
+workspacesRouter.get("/workspaces/:id/attention", async (c) => {
+  const workspaceId = c.req.param("id");
+  const userId = c.get("userId");
+  const membership = await workspaceAccess(userId, workspaceId);
+  const scope =
+    membership.role === "member"
+      ? and(
+          eq(boards.workspaceId, workspaceId),
+          inArray(
+            boards.id,
+            db
+              .select({ id: boardMembers.boardId })
+              .from(boardMembers)
+              .where(eq(boardMembers.userId, userId)),
+          ),
+        )
+      : eq(boards.workspaceId, workspaceId);
+  const rows = await db
+    .select({
+      id: cards.id,
+      title: cards.title,
+      dueDate: cards.dueDate,
+      approvalStatus: cards.approvalStatus,
+      approvalRequestedAt: cards.approvalRequestedAt,
+      approvalRespondedAt: cards.approvalRespondedAt,
+      blockedReason: cards.blockedReason,
+      blockedOn: cards.blockedOn,
+      blockedAt: cards.blockedAt,
+      delayReason: cards.delayReason,
+      listName: lists.name,
+      boardId: boards.id,
+      boardName: boards.name,
+    })
+    .from(cards)
+    .innerJoin(lists, eq(cards.listId, lists.id))
+    .innerJoin(boards, eq(lists.boardId, boards.id))
+    .where(
+      and(scope, eq(cards.isArchived, false), eq(cards.isCompleted, false)),
+    );
+  const now = Date.now();
+  type Kind = "blocked" | "late" | "changes" | "waiting";
+  const items = rows.flatMap((card) => {
+    const late = !!card.dueDate && card.dueDate.getTime() < now;
+    let kind: Kind | null = null;
+    let reason: string | null = null;
+    let since: Date | null = null;
+    if (card.blockedReason && card.blockedOn !== "client") {
+      [kind, reason, since] = ["blocked", card.blockedReason, card.blockedAt];
+    } else if (late) {
+      [kind, reason, since] = ["late", card.delayReason, card.dueDate];
+    } else if (card.approvalStatus === "changes_requested") {
+      [kind, since] = ["changes", card.approvalRespondedAt];
+    } else if (card.blockedOn === "client" && card.blockedReason) {
+      [kind, reason, since] = ["waiting", card.blockedReason, card.blockedAt];
+    } else if (card.approvalStatus === "pending") {
+      [kind, reason, since] = ["waiting", "Approval", card.approvalRequestedAt];
+    }
+    if (!kind) return [];
+    return [
+      {
+        cardId: card.id,
+        title: card.title,
+        boardId: card.boardId,
+        boardName: card.boardName,
+        listName: card.listName,
+        kind,
+        reason,
+        blockedOn: card.blockedOn,
+        since,
+        dueDate: card.dueDate,
+        late,
+        assignees: [] as string[],
+      },
+    ];
+  });
+  const ids = items.map((item) => item.cardId);
+  if (ids.length) {
+    const people = await db
+      .select({ cardId: cardMembers.cardId, name: users.name })
+      .from(cardMembers)
+      .innerJoin(users, eq(cardMembers.userId, users.id))
+      .where(inArray(cardMembers.cardId, ids.slice(0, 90)));
+    for (const person of people)
+      items.find((item) => item.cardId === person.cardId)?.assignees.push(person.name);
+  }
+  const order: Record<Kind, number> = { blocked: 0, late: 1, changes: 2, waiting: 3 };
+  items.sort(
+    (a, b) =>
+      order[a.kind] - order[b.kind] ||
+      (a.since?.getTime() ?? now) - (b.since?.getTime() ?? now),
+  );
+  const count = (kind: Kind) => items.filter((item) => item.kind === kind).length;
+  return c.json({
+    counts: {
+      blocked: count("blocked"),
+      late: count("late"),
+      changes: count("changes"),
+      waiting: count("waiting"),
+    },
+    items: items.slice(0, 100),
   });
 });
 
