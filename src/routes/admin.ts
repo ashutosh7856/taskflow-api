@@ -28,6 +28,7 @@ import {
   lists,
   paymentEvents,
   subscriptions,
+  userFeedback,
   users,
   workspaces,
 } from "../db/schema";
@@ -47,6 +48,7 @@ import {
   updateDiscountSchema,
 } from "../validators/discounts";
 import { runWeeklyUpdates } from "../services/client-updates";
+import { feedbackInsights, triageFeedback } from "../services/feedback";
 
 const adminRouter = new Hono<AppEnv>();
 adminRouter.use("*", async (c, next) => {
@@ -854,6 +856,81 @@ adminRouter.patch("/admin/discounts/:id", async (c) => {
     ...input,
   });
   return c.json(updated);
+});
+
+
+/* ------------------------------------------------------------------ */
+/* Feedback: bug reports and feature ideas, triaged by AI              */
+/* ------------------------------------------------------------------ */
+
+adminRouter.get("/admin/feedback", async (c) => {
+  const rows = await db
+    .select({
+      id: userFeedback.id,
+      kind: userFeedback.kind,
+      message: userFeedback.message,
+      page: userFeedback.page,
+      status: userFeedback.status,
+      ai: userFeedback.ai,
+      createdAt: userFeedback.createdAt,
+      userId: userFeedback.userId,
+      userEmail: users.email,
+      userName: users.name,
+    })
+    .from(userFeedback)
+    .leftJoin(users, eq(users.id, userFeedback.userId))
+    .orderBy(desc(userFeedback.createdAt))
+    .limit(500);
+  return c.json(rows);
+});
+
+adminRouter.patch("/admin/feedback/:id", async (c) => {
+  const input = await body(
+    c,
+    z.object({ status: z.enum(["new", "planned", "done", "closed"]) }),
+  );
+  const [row] = await db
+    .update(userFeedback)
+    .set({ status: input.status, updatedAt: new Date() })
+    .where(eq(userFeedback.id, c.req.param("id")))
+    .returning({ id: userFeedback.id, userId: userFeedback.userId });
+  if (!row) throw new HttpError(404, "Feedback not found");
+  await audit(c.get("userId"), "feedback.status", row.userId, {
+    id: row.id,
+    status: input.status,
+  });
+  return c.json({ ok: true });
+});
+
+adminRouter.post("/admin/feedback/:id/triage", async (c) => {
+  if (!process.env.OPENAI_API_KEY)
+    throw new HttpError(503, "AI is not configured yet");
+  const triage = await triageFeedback(c.req.param("id"));
+  if (!triage) throw new HttpError(502, "AI could not analyse this one. Try again.");
+  return c.json(triage);
+});
+
+adminRouter.post("/admin/feedback/insights", async (c) => {
+  const rows = await db
+    .select({
+      kind: userFeedback.kind,
+      message: userFeedback.message,
+      ai: userFeedback.ai,
+    })
+    .from(userFeedback)
+    .where(inArray(userFeedback.status, ["new", "planned"]))
+    .orderBy(desc(userFeedback.createdAt))
+    .limit(200);
+  if (!rows.length) throw new HttpError(400, "No open feedback to analyse yet");
+  const insights = await feedbackInsights(
+    rows.map((row) => ({
+      kind: row.kind,
+      message: row.message.slice(0, 600),
+      area: row.ai?.area,
+      severity: row.ai?.severity,
+    })),
+  );
+  return c.json({ ...insights, analysed: rows.length });
 });
 
 export default adminRouter;

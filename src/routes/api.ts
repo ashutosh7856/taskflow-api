@@ -17,6 +17,7 @@ import portalRouter from "./portal";
 import filesRouter from "./files";
 import { slackRouter } from "./slack";
 import tasksRouter from "./tasks";
+import { feedbackRouter } from "./feedback";
 
 const api = new Hono<AppEnv>();
 
@@ -35,6 +36,7 @@ api.route("/", portalRouter);
 api.route("/", filesRouter);
 api.route("/", slackRouter);
 api.route("/", tasksRouter);
+api.route("/", feedbackRouter);
 // adminRouter guards "*" with an admin check, so it must stay mounted last.
 api.route("/", adminRouter);
 

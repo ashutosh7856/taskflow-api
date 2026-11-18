@@ -87,3 +87,43 @@ export const adminLoginCodes = sqliteTable(
   },
   (table) => [index("admin_login_codes_created_idx").on(table.createdAt)],
 );
+
+/**
+ * Bug reports and feature ideas sent from the app. `ai` holds the automatic
+ * triage (summary, area, severity) so the admin can sort them at a glance.
+ */
+export const userFeedback = sqliteTable(
+  "user_feedback",
+  {
+    id: id("id"),
+    userId: uuidRef("user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    kind: enumText(["bug", "feature"] as const)("kind").notNull(),
+    message: text("message").notNull(),
+    page: text("page"),
+    status: enumText(["new", "planned", "done", "closed"] as const)("status")
+      .default("new")
+      .notNull(),
+    ai: json("ai").$type<FeedbackTriage | null>(),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
+      .notNull(),
+    updatedAt: timestamp("updated_at")
+      .$defaultFn(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("user_feedback_created_idx").on(table.createdAt),
+    index("user_feedback_user_idx").on(table.userId),
+  ],
+);
+
+export type FeedbackTriage = {
+  title: string;
+  summary: string;
+  area: string;
+  severity: "low" | "medium" | "high" | "critical";
+  sentiment: "positive" | "neutral" | "frustrated";
+  suggestedAction: string;
+};
