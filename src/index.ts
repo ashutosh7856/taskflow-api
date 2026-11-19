@@ -14,6 +14,7 @@ import { slackCallback } from "./routes/slack";
 import { isAllowedOrigin } from "./lib/origins";
 import { type FileBucket, useBucket } from "./services/storage";
 import { runWeeklyUpdates } from "./services/client-updates";
+import { runLifecycleEmails } from "./services/lifecycle";
 import { withDatabase, type D1Binding } from "./db";
 import { templates } from "./lib/templates";
 
@@ -99,6 +100,8 @@ app.onError((error, c) => {
   return c.json({ error: "Internal server error" }, 500);
 });
 
+const DAILY_CRON = "0 14 * * *";
+
 type WorkerEnv = {
   DB?: D1Binding;
   FILES?: FileBucket;
@@ -106,15 +109,22 @@ type WorkerEnv = {
 
 export default {
   fetch: app.fetch,
-  /** Cloudflare Cron Trigger (see wrangler.jsonc): Friday client updates. */
+  /**
+   * Cloudflare Cron Triggers (see wrangler.jsonc): Friday client updates, and
+   * the daily onboarding emails.
+   */
   async scheduled(
-    _event: unknown,
+    event: { cron?: string },
     env: WorkerEnv,
     ctx: { waitUntil(promise: Promise<unknown>): void },
   ) {
     useBucket(env.FILES, true);
+    const job = async () => {
+      if (event.cron === DAILY_CRON) await runLifecycleEmails();
+      else await runWeeklyUpdates();
+    };
     ctx.waitUntil(
-      withDatabase(() => runWeeklyUpdates(), {
+      withDatabase(job, {
         d1: env.DB,
         waitUntil: ctx.waitUntil.bind(ctx),
       }),

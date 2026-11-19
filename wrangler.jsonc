@@ -25,7 +25,9 @@
   // To turn on: `npx wrangler r2 bucket create danto-files`, then uncomment:
   // "r2_buckets": [{ "binding": "FILES", "bucket_name": "danto-files" }],
   // Friday 09:00 UTC: automatic AI client updates (src/services/client-updates.ts).
-  "triggers": { "crons": ["0 9 * * 5"] },
+  // Fri 09:00 UTC: AI client updates. Daily 14:00 UTC: onboarding emails
+  // (DAILY_CRON in src/index.ts must match).
+  "triggers": { "crons": ["0 9 * * 5", "0 14 * * *"] },
   "upload_source_maps": true,
   "keep_vars": true,
   "vars": {
