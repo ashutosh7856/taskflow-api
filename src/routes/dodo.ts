@@ -7,6 +7,7 @@ import {
   discountCodes,
   discountRedemptions,
   paymentEvents,
+  subscriptionEvents,
   subscriptions,
   users,
 } from "../db/schema";
@@ -25,6 +26,12 @@ import {
 } from "../services/dodo";
 import { frontendUrl, sendEmail } from "../services/email";
 import { invalidatePlan, planCatalog } from "../services/entitlements";
+import {
+  classifyChange,
+  countedCents,
+  storedState,
+  type SubSnapshot,
+} from "../services/revenue";
 
 const dodoRouter = new Hono<AppEnv>();
 const planNames = { pro: "Pro", business: "Team" } as const;
@@ -287,6 +294,61 @@ export async function cancelDodoRenewal(row: SubscriptionRow) {
     .set({ billingStatus: "cancelled", updatedAt: new Date() })
     .where(eq(subscriptions.userId, row.userId));
   invalidatePlan(row.userId);
+  await logSubscriptionChange(
+    row.userId,
+    row.dodoSubscriptionId,
+    snapshotOf(row),
+    snapshotOf({ ...row, billingStatus: "cancelled" }),
+  );
+}
+
+function snapshotOf(row: {
+  billingStatus: string;
+  currentPeriodEnd: Date | null;
+  dodoSubscriptionId: string | null;
+  paypalSubscriptionId?: string | null;
+  plan: string;
+  billingInterval: string;
+}): SubSnapshot {
+  return {
+    state: storedState({
+      billingStatus: row.billingStatus,
+      currentPeriodEnd: row.currentPeriodEnd,
+      providerId: row.dodoSubscriptionId || row.paypalSubscriptionId || null,
+    }),
+    plan: row.plan,
+    interval: row.billingInterval,
+  };
+}
+
+/** Records a paid-subscription change for MRR history. Never blocks billing. */
+async function logSubscriptionChange(
+  userId: string,
+  providerSubscriptionId: string | null,
+  before: SubSnapshot,
+  after: SubSnapshot,
+  trial = false,
+) {
+  const kind = classifyChange(before, after);
+  if (!kind) return;
+  await db
+    .insert(subscriptionEvents)
+    .values({
+      userId,
+      providerSubscriptionId,
+      kind,
+      plan: after.plan as "pro" | "business" | null,
+      billingInterval: after.interval,
+      trial: kind === "subscribed" && trial,
+      mrrBeforeCents: countedCents(before),
+      mrrAfterCents: countedCents(after),
+    })
+    .catch((error) =>
+      console.error("Could not record subscription event", {
+        kind,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
 }
 
 /**
@@ -386,6 +448,23 @@ export async function applySubscription(
     })
     .where(eq(subscriptions.userId, userId));
   invalidatePlan(userId);
+  // Confirm and webhooks can apply the same state more than once; only a
+  // real change is logged, and only by the request that claimed a new one.
+  if (!isNew || claimed)
+    await logSubscriptionChange(
+      userId,
+      sub.subscription_id,
+      snapshotOf(row),
+      snapshotOf({
+        billingStatus: status,
+        currentPeriodEnd:
+          sub.status === "expired" ? new Date() : (periodEnd ?? null),
+        dodoSubscriptionId: sub.subscription_id,
+        plan: product.plan,
+        billingInterval: product.interval,
+      }),
+      sub.trial_period_days > 0,
+    );
 
   // A newer subscription replaced an older one (plan change during the
   // trial, or a fresh checkout after a failed payment): stop the old one so

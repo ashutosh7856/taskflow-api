@@ -8,6 +8,7 @@ import {
   like,
   inArray,
   isNotNull,
+  lt,
   or,
   sql,
   sum,
@@ -27,6 +28,7 @@ import {
   discountRedemptions,
   lists,
   paymentEvents,
+  subscriptionEvents,
   subscriptions,
   userFeedback,
   users,
@@ -48,6 +50,7 @@ import {
   updateDiscountSchema,
 } from "../validators/discounts";
 import { runWeeklyUpdates } from "../services/client-updates";
+import { revenueReport } from "../services/revenue-report";
 import { feedbackInsights, triageFeedback } from "../services/feedback";
 
 const adminRouter = new Hono<AppEnv>();
@@ -66,6 +69,7 @@ function audit(
   meta?: unknown,
 ) {
   invalidate("admin-overview");
+  invalidate("admin-revenue");
   return db
     .insert(adminAuditLogs)
     .values({ adminId, action, targetUserId, meta });
@@ -272,21 +276,14 @@ async function overviewData() {
     pro: billed.filter((row) => row.plan === "pro").length,
     business: billed.filter((row) => row.plan === "business").length,
   };
-  // Yearly subscribers count as 1/12 of their annual price per month.
-  const estimatedMrr = Math.round(
-    billed.reduce(
-      (total, row) =>
-        total +
-        (row.interval === "year"
-          ? planCatalog[row.plan as "pro" | "business"].yearlyPriceUsd / 12
-          : planCatalog[row.plan as "pro" | "business"].priceUsd),
-      0,
-    ),
-  );
   const yearlyCustomers = billed.filter(
     (row) => row.interval === "year",
   ).length;
   const totalUsers = Number(userRows[0]?.total || 0);
+  // MRR and paying customers use the Revenue tab's strict rule: only
+  // subscriptions that have actually paid (trials with a card are pipeline).
+  const revenue = await cached("admin-revenue", 60, () => revenueData());
+  const strictMrr = revenue.mrrCents / 100;
 
   return {
     users: totalUsers,
@@ -297,11 +294,11 @@ async function overviewData() {
     workspaces: Number(workspaceRows[0]?.total || 0),
     activePlans,
     compedAccounts: paying.length - billed.length,
-    payingCustomers: billed.length,
+    payingCustomers: revenue.payingCustomers,
     yearlyCustomers,
-    estimatedMrr,
+    estimatedMrr: strictMrr,
     mrrGoal: MRR_GOAL,
-    arpu: billed.length ? estimatedMrr / billed.length : 0,
+    arpu: revenue.arpuCents / 100,
     cancelled30d: Number(cancelled30[0]?.total || 0),
     collectedLast30Days: Number(revenueRows[0]?.amount || 0),
     portalsLive: Number(portalsLive[0]?.total || 0),
@@ -318,7 +315,7 @@ async function overviewData() {
         step: "Requested an approval",
         total: Number(funnelApprovals[0]?.total || 0),
       },
-      { step: "Paying", total: billed.length },
+      { step: "Paying", total: revenue.payingCustomers },
     ],
     signupSeries: signupSeries.map((row) => ({
       day: row.day,
@@ -339,6 +336,84 @@ async function overviewData() {
       estimatedCostUsd: Number(aiRows[0]?.costMicrousd || 0) / 1_000_000,
     },
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Revenue: MRR, customers, cancellations, cash                        */
+/* ------------------------------------------------------------------ */
+
+adminRouter.get("/admin/revenue", async (c) =>
+  c.json(await cached("admin-revenue", 60, () => revenueData())),
+);
+
+async function revenueData() {
+  const now = Date.now();
+  const [subs, payments, events, userRows, new30, prev30] = await Promise.all([
+    db
+      .select({
+        userId: subscriptions.userId,
+        name: users.name,
+        email: users.email,
+        plan: subscriptions.plan,
+        interval: subscriptions.billingInterval,
+        billingStatus: subscriptions.billingStatus,
+        currentPeriodEnd: subscriptions.currentPeriodEnd,
+        providerId: sql<string | null>`coalesce(${subscriptions.dodoSubscriptionId}, ${subscriptions.paypalSubscriptionId})`,
+      })
+      .from(subscriptions)
+      .innerJoin(users, eq(subscriptions.userId, users.id))
+      .where(
+        or(
+          isNotNull(subscriptions.dodoSubscriptionId),
+          isNotNull(subscriptions.paypalSubscriptionId),
+        ),
+      ),
+    db
+      .select({
+        userId: paymentEvents.userId,
+        providerSubscriptionId: paymentEvents.providerSubscriptionId,
+        status: paymentEvents.status,
+        amount: paymentEvents.amount,
+        currency: paymentEvents.currency,
+        occurredAt: paymentEvents.occurredAt,
+      })
+      .from(paymentEvents),
+    db
+      .select({
+        userId: subscriptionEvents.userId,
+        email: users.email,
+        kind: subscriptionEvents.kind,
+        plan: subscriptionEvents.plan,
+        billingInterval: subscriptionEvents.billingInterval,
+        trial: subscriptionEvents.trial,
+        mrrBeforeCents: subscriptionEvents.mrrBeforeCents,
+        mrrAfterCents: subscriptionEvents.mrrAfterCents,
+        occurredAt: subscriptionEvents.occurredAt,
+      })
+      .from(subscriptionEvents)
+      .leftJoin(users, eq(subscriptionEvents.userId, users.id))
+      .where(gte(subscriptionEvents.occurredAt, new Date(now - 365 * DAY)))
+      .orderBy(desc(subscriptionEvents.occurredAt)),
+    db.select({ total: count() }).from(users),
+    db
+      .select({ total: count() })
+      .from(users)
+      .where(gte(users.createdAt, new Date(now - 30 * DAY))),
+    db
+      .select({ total: count() })
+      .from(users)
+      .where(
+        and(
+          gte(users.createdAt, new Date(now - 60 * DAY)),
+          lt(users.createdAt, new Date(now - 30 * DAY)),
+        ),
+      ),
+  ]);
+  return revenueReport(subs, payments, events, {
+    users: Number(userRows[0]?.total || 0),
+    users30d: Number(new30[0]?.total || 0),
+    usersPrev30d: Number(prev30[0]?.total || 0),
+  });
 }
 
 /* ------------------------------------------------------------------ */

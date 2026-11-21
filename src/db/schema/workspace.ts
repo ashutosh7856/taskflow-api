@@ -192,6 +192,37 @@ export const paymentEvents = sqliteTable(
   ],
 );
 
+/**
+ * Every change to a paid subscription (started, cancel scheduled,
+ * reactivated, payment failed, ended, plan changed), with the monthly value
+ * before and after. Drives MRR movements and churn in the admin.
+ */
+export const subscriptionEvents = sqliteTable(
+  "subscription_events",
+  {
+    id: id("id"),
+    userId: uuidRef("user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    providerSubscriptionId: text("provider_subscription_id"),
+    kind: text("kind").notNull(),
+    plan: planEnum("plan"),
+    billingInterval: text("billing_interval"),
+    /** Started with a free trial (no charge yet). */
+    trial: bool("trial").default(false).notNull(),
+    /** Monthly value in cents, before and after this change. */
+    mrrBeforeCents: integer("mrr_before_cents").default(0).notNull(),
+    mrrAfterCents: integer("mrr_after_cents").default(0).notNull(),
+    occurredAt: timestamp("occurred_at")
+      .$defaultFn(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("subscription_event_occurred_idx").on(table.occurredAt),
+    index("subscription_event_user_idx").on(table.userId),
+  ],
+);
+
 export const billingPlans = sqliteTable("billing_plans", {
   plan: planEnum("plan").primaryKey(),
   paypalProductId: text("paypal_product_id").notNull(),
