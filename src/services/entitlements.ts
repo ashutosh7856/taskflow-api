@@ -167,10 +167,14 @@ export async function assertBoardCreationAvailable(workspaceId: string) {
     .innerJoin(workspaces, eq(boards.workspaceId, workspaces.id))
     .where(eq(workspaces.ownerId, workspace.ownerId));
   if (Number(total) >= limit) {
-    throw new HttpError(402, `${plan} plan board limit reached`, {
-      upgradeRequired: true,
-      boards: limit,
-    });
+    throw new HttpError(
+      402,
+      `The ${plan === "free" ? "Free" : plan} plan includes ${limit} boards. Upgrade to Pro for unlimited boards, or delete a board you no longer need.`,
+      {
+        upgradeRequired: true,
+        boards: limit,
+      },
+    );
   }
 }
 

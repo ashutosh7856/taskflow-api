@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { alignPlan, mergePlan, normalizeTitle } from "./ai";
+import { alignPlan, hasTimeline, mergePlan, normalizeTitle } from "./ai";
 
 const task = (title: string) => ({
   title,
@@ -116,3 +116,13 @@ describe("AI plan apply", () => {
   });
 });
 
+
+describe("AI board draft timelines", () => {
+  test("keeps dates only when the user gave a timeline", () => {
+    expect(hasTimeline("Website for a bakery, launch in 4 weeks")).toBe(true);
+    expect(hasTimeline("Needs to be done by Friday")).toBe(true);
+    expect(hasTimeline("Q1 roadmap for the app")).toBe(true);
+    expect(hasTimeline("Track my team: sales, tech and marketing")).toBe(false);
+    expect(hasTimeline("Everyone updates what they're working on")).toBe(false);
+  });
+});

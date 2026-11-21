@@ -6,6 +6,7 @@ import { db } from "../db";
 import {
   boardMembers,
   boards,
+  cardLabels,
   cardMembers,
   cards,
   labels,
@@ -21,6 +22,8 @@ import {
 } from "../lib/access";
 import { invalidateEdge } from "../lib/cache";
 import { getTemplate, templateIds } from "../lib/templates";
+import { boardDraftSchema, normalizeDraft } from "../lib/board-draft";
+import { mergePlan, normalizeTitle } from "./ai";
 import { ensureListRoles } from "../services/list-roles";
 import { purgeFiles } from "../services/storage";
 import { body, HttpError, type AppEnv } from "../lib/http";
@@ -37,7 +40,6 @@ boardsRouter.get("/workspaces/:workspaceId/boards", async (c) => {
   const workspaceId = c.req.param("workspaceId");
   const userId = c.get("userId");
   await workspaceAccess(userId, workspaceId);
-  await assertBoardCreationAvailable(workspaceId);
 
   const rows = await db
     .select({ board: boards, role: boardMembers.role })
@@ -60,13 +62,60 @@ boardsRouter.post("/workspaces/:workspaceId/boards", async (c) => {
     nameSchema.extend({
       backgroundColor: z.string().min(1).default("blue"),
       template: z.enum(templateIds).default("blank"),
+      /** An AI-drafted board the user reviewed; replaces the template's stages. */
+      draft: boardDraftSchema.optional(),
     }),
   );
-  const { template, ...boardInput } = input;
+  await assertBoardCreationAvailable(workspaceId);
+  const { template, draft: rawDraft, ...boardInput } = input;
+  const draft = rawDraft ? normalizeDraft(rawDraft, template) : null;
+
+  const boardId = crypto.randomUUID();
+  const listRows = (draft?.lists ?? getTemplate(template).lists).map((list, position) => ({
+    id: crypto.randomUUID(),
+    boardId,
+    name: list.name,
+    role: list.role,
+    position,
+  }));
+  const labelRows = (draft?.labels ?? getTemplate(template).labels).map((label) => ({
+    id: crypto.randomUUID(),
+    boardId,
+    name: label.name,
+    color: label.color,
+  }));
+
+  // Starter cards go through the same merge as the AI planner: deduped,
+  // placed in working stages, and later stages never due before earlier ones.
+  const cardRows: Array<ReturnType<typeof mergePlan>["newCards"][number] & { id: string }> = [];
+  const cardLabelRows: Array<{ cardId: string; labelId: string }> = [];
+  if (draft) {
+    const { newCards } = mergePlan(
+      {
+        projectName: boardInput.name,
+        overview: "",
+        lists: draft.lists.map((list) => ({ name: list.name, tasks: list.tasks })),
+      },
+      listRows.map((list) => ({ ...list, cards: [] })),
+    );
+    const taskLabels = new Map(
+      draft.lists.flatMap((list) =>
+        list.tasks.map((task) => [normalizeTitle(task.title), task.labels] as const),
+      ),
+    );
+    const labelId = new Map(labelRows.map((label) => [label.name, label.id]));
+    for (const card of newCards) {
+      const id = crypto.randomUUID();
+      cardRows.push({ ...card, id });
+      for (const name of taskLabels.get(normalizeTitle(card.title)) ?? []) {
+        const match = labelId.get(name);
+        if (match) cardLabelRows.push({ cardId: id, labelId: match });
+      }
+    }
+  }
 
   // One row per statement keeps each under D1's 100 bound-parameter limit;
   // the batch commits them all or none.
-  const boardId = crypto.randomUUID();
   const [[board]] = await db.batch([
     db
       .insert(boards)
@@ -79,13 +128,16 @@ boardsRouter.post("/workspaces/:workspaceId/boards", async (c) => {
       })
       .returning(),
     db.insert(boardMembers).values({ boardId, userId, role: "owner" }),
-    ...getTemplate(template).lists.map((list, position) =>
-      db.insert(lists).values({ boardId, ...list, position }),
-    ),
-    ...getTemplate(template).labels.map((label) =>
-      db.insert(labels).values({ ...label, boardId }),
-    ),
+    ...listRows.map((list) => db.insert(lists).values(list)),
+    ...labelRows.map((label) => db.insert(labels).values(label)),
+    ...cardRows.map((card) => db.insert(cards).values({ ...card, createdBy: userId })),
+    ...cardLabelRows.map((row) => db.insert(cardLabels).values(row)),
   ]);
+  if (draft)
+    await recordActivity(userId, boardId, "ai.plan_applied", undefined, {
+      lists: listRows.length,
+      cards: cardRows.length,
+    });
 
   return c.json(board, 201);
 });
